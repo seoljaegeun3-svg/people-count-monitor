@@ -1,0 +1,23 @@
+{
+  "name": "people-count-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "카메라·YouTube·LS PLC 피플카운팅 통합 모니터",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "dist:win": "electron-builder --win portable --x64"
+  },
+  "devDependencies": {
+    "electron": "44.7.2",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "kr.peoplecount.monitor",
+    "productName": "People Count Monitor",
+    "files": ["main.js", "preload.js", "plc.js", "ui/**", "package.json"],
+    "win": { "target": "portable" },
+    "artifactName": "People-Count-Monitor-${version}.${ext}"
+  }
+}

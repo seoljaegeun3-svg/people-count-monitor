@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'">
+  <title>People Count Monitor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand-icon">◉</div><div><h1>People Count <span>Monitor</span></h1><p>카메라부터 PLC까지, 하나의 화면에서</p></div>
+    <div class="header-right"><span class="local-badge">LOCAL WORKSPACE</span><time id="clock"></time><button id="open-settings">⚙ 연결 설정</button></div>
+  </header>
+  <main>
+    <div class="workspace">
+      <section class="panel camera-panel" aria-label="카메라">
+        <div class="panel-title"><div><span class="eyebrow">01 / CAMERA</span><h2>카메라 모니터링</h2></div><span class="status" id="camera-status">연결 대기</span></div>
+        <form id="camera-form" class="address-bar"><label class="sr-only" for="camera-url">카메라 주소</label><input id="camera-url" type="url" required><button>열기 ↗</button></form>
+        <div class="browser-tools"><span>Hanwha Vision · 웹 뷰어</span><div><button data-panel="camera" data-action="back" aria-label="카메라 뒤로">←</button><button data-panel="camera" data-action="reload" aria-label="카메라 새로고침">↻</button><button data-panel="camera" data-action="zoom-out" aria-label="카메라 축소">−</button><button data-panel="camera" data-action="zoom-in" aria-label="카메라 확대">＋</button></div></div>
+        <div class="browser-space" id="camera-space"><div><span class="empty-icon">◎</span><h3>카메라 화면</h3><p>카메라와 같은 네트워크에서 연결하세요.<br>로그인은 이 영역에 표시되는 카메라 페이지에서 합니다.</p></div></div>
+      </section>
+      <div class="divider" role="separator" aria-label="카메라 화면 비율" aria-orientation="vertical" tabindex="0"></div>
+      <section class="panel youtube-panel" aria-label="유튜브">
+        <div class="panel-title"><div><span class="eyebrow">02 / YOUTUBE</span><h2>함께 보는 유튜브</h2></div><span class="status" id="youtube-status">연결 대기</span></div>
+        <form id="youtube-form" class="address-bar"><label class="sr-only" for="youtube-url">유튜브 주소</label><input id="youtube-url" type="url" placeholder="YouTube 영상 주소를 붙여넣으세요" required><button>열기 ↗</button></form>
+        <div class="browser-tools"><span>원하는 영상이나 라이브를 재생하세요</span><div><button data-panel="youtube" data-action="back" aria-label="유튜브 뒤로">←</button><button data-panel="youtube" data-action="reload" aria-label="유튜브 새로고침">↻</button></div></div>
+        <div class="browser-space" id="youtube-space"><div><span class="empty-icon youtube-icon">▶</span><h3>내가 보고 싶은 영상</h3><p>YouTube 웹사이트가 여기에 표시됩니다.</p></div></div>
+      </section>
+    </div>
+    <section class="plc-panel" aria-label="PLC 실시간 값">
+      <div class="plc-heading"><span class="eyebrow">03 / LIVE PLC</span><h2>피플카운팅 값</h2><span id="plc-endpoint">LS XGT · 192.168.1.2:2004</span></div>
+      <div class="reading"><span class="word" id="plc-word">%MW0</span><strong id="plc-value">—</strong><span class="unit">WORD 값</span></div>
+      <div class="plc-detail"><span id="plc-status" class="status">연결 대기</span><p id="plc-message">설정을 확인한 후 연결하세요.</p><small id="plc-updated">수신 기록 없음</small></div>
+      <button class="primary" id="plc-connect">PLC 연결</button>
+    </section>
+    <footer><span><i></i> 카메라와 PLC가 연결된 Windows PC에서 사용</span><span>PLC 읽기 전용 · 자동 쓰기 / 리셋 없음</span></footer>
+  </main>
+  <dialog id="settings-dialog">
+    <form id="settings-form">
+      <span class="eyebrow">CONNECTION SETTINGS</span><h2>연결 설정</h2><p>기존 PeopleCounter의 LS XGT 기본 설정입니다.<br>실제 PLC 설정과 일치하는지 확인하세요.</p>
+      <label>카메라 주소<input id="settings-camera" type="url" required></label>
+      <label>YouTube 시작 주소<input id="settings-youtube" type="url" required></label>
+      <div class="form-grid"><label>PLC IP<input id="settings-host" required></label><label>TCP 포트<input id="settings-port" type="number" min="1" max="65535" required></label><label>메모리 주소<input id="settings-word" pattern="%MW[0-9]{1,6}" required></label><label>갱신 주기 (ms)<input id="settings-interval" type="number" min="500" max="60000" required></label></div>
+      <p class="note">LS XGT Ethernet · unsigned 16-bit word<br>카메라 비밀번호는 여기 저장하지 않습니다.</p>
+      <p id="settings-error" role="alert"></p><div class="dialog-actions"><button type="button" id="close-settings">취소</button><button class="primary">저장하고 적용</button></div>
+    </form>
+  </dialog>
+  <div id="toast" role="status" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
