@@ -1,4 +1,4 @@
-// Real Chromium HTTP authentication against loopback fixtures only; no camera credentials.
+// Real Chromium camera authentication and web navigation against local fixtures only.
 const { app, BrowserWindow, session } = require('electron');
 const http = require('node:http');
 const fs = require('node:fs');
@@ -44,7 +44,13 @@ const timeout = setTimeout(() => { console.error('Camera authentication smoke te
   const origin = `http://127.0.0.1:${server.address().port}`;
   const config = { camera: `${origin}/basic`, youtube: 'https://www.youtube.com/', plc: { host: '127.0.0.1', port: 2004, word: '%MW0', interval: 500 } };
   fs.writeFileSync(path.join(profile, 'settings.json'), JSON.stringify(config));
-  session.fromPartition('persist:youtube').webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, callback) => callback({ cancel: true }));
+  const browserSession = session.fromPartition('persist:youtube');
+  const webRequests = [];
+  browserSession.protocol.handle('https', request => {
+    webRequests.push(request.url);
+    return new Response('<h1 id="web-fixture">Mock web page</h1><a id="result" href="https://example.com/result" target="_blank">Search result</a>', { headers: { 'Content-Type': 'text/html' } });
+  });
+  browserSession.webRequest.onBeforeRequest({ urls: ['http://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).hostname !== '127.0.0.1' }));
   session.fromPartition('persist:camera').webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).hostname !== '127.0.0.1' }));
   require('../main.js');
   await until(() => BrowserWindow.getAllWindows().length > 0, 'main window');
@@ -92,6 +98,31 @@ const timeout = setTimeout(() => { console.error('Camera authentication smoke te
   await until(() => camera.getURL().endsWith('#/statistics/setup/PEOPLE_COUNTING'), 'people-counting shortcut');
   assert(!fs.readFileSync(path.join(profile, 'settings.json'), 'utf8').includes(password));
   console.log('PASS: home/counting shortcuts, camera password absent from settings');
+
+  const browser = win.contentView.children[1].webContents;
+  const navigateWeb = input => ui(`document.getElementById('youtube-url').value = ${JSON.stringify(input)}; document.getElementById('youtube-form').requestSubmit(); true;`);
+  await navigateWeb('오늘 날씨 & CCTV');
+  await until(() => new URL(browser.getURL()).hostname === 'www.google.com' && new URL(browser.getURL()).searchParams.get('q') === '오늘 날씨 & CCTV', 'Google search navigation');
+  await until(() => browser.executeJavaScript("document.getElementById('web-fixture') !== null"), 'mock Google page loaded');
+  await until(() => ui("document.getElementById('youtube-url').value.includes('google.com/search?')"), 'browser address follows navigation');
+  await browser.executeJavaScript("document.getElementById('result').click(); true;");
+  await until(() => browser.getURL() === 'https://example.com/result', 'target blank search result opens in browser panel');
+  assert.equal(BrowserWindow.getAllWindows().length, 1, 'web results must not create extra windows');
+  assert.equal(await browser.executeJavaScript("typeof require + '/' + typeof window.monitor"), 'undefined/undefined', 'remote web content has no privileged bridge');
+  await ui("document.querySelector('[data-panel=youtube][data-action=back]').click()");
+  await until(() => new URL(browser.getURL()).searchParams.get('q') === '오늘 날씨 & CCTV', 'browser back to search');
+  await ui("document.querySelector('[data-panel=youtube][data-action=forward]').click()");
+  await until(() => browser.getURL() === 'https://example.com/result', 'browser forward to result');
+  await navigateWeb('example.org/test');
+  await until(() => browser.getURL() === 'https://example.org/test', 'bare website address');
+  await ui("document.querySelector('[data-panel=youtube][data-action=google]').click()");
+  await until(() => browser.getURL() === 'https://www.google.com/', 'Google shortcut');
+  await ui("document.querySelector('[data-panel=youtube][data-action=youtube]').click()");
+  await until(() => browser.getURL() === 'https://www.youtube.com/', 'YouTube shortcut');
+  await ui(`window.monitor.save({...${JSON.stringify(config)}, youtube: 'https://www.google.com/'}).then(() => true)`);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'settings.json'), 'utf8')).youtube, 'https://www.google.com/');
+  assert(webRequests.some(url => url.includes('google.com/search?')));
+  console.log('PASS: Google search, website address, new-window links, back/forward, shortcuts, saved browser start page, sandbox isolation');
 })().then(() => {
   clearTimeout(timeout); server.closeAllConnections(); foreign.closeAllConnections(); server.close(); foreign.close(); app.exit(0);
 }, error => {

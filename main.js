@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { validatePLC, readWord } = require('./plc');
+const { resolveWebInput, safeWebURL } = require('./web-url');
 
 app.setName('People Count Monitor');
 let window, panels, settings, settingsPath;
@@ -16,12 +17,11 @@ const defaults = {
   plc: { host: '192.168.1.2', port: 2004, word: '%MW0', interval: 500 }
 };
 function safeURL(panel, input) {
+  if (panel === 'youtube') return resolveWebInput(input);
   if (typeof input !== 'string' || input.length > 4096) throw new Error('주소를 확인하세요.');
   const url = new URL(input);
   if (url.username || url.password) throw new Error('주소에 비밀번호를 넣지 마세요. 카메라 화면에서 로그인하세요.');
-  if (panel === 'youtube') {
-    if (url.protocol !== 'https:' || !['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'].includes(url.hostname)) throw new Error('YouTube 주소를 입력하세요.');
-  } else if (panel !== 'camera' || !['http:', 'https:'].includes(url.protocol)) throw new Error('카메라 HTTP/HTTPS 주소를 입력하세요.');
+  if (panel !== 'camera' || !['http:', 'https:'].includes(url.protocol)) throw new Error('카메라 HTTP/HTTPS 주소를 입력하세요.');
   return url.href;
 }
 function emit(channel, data) {
@@ -75,7 +75,15 @@ app.whenReady().then(async () => {
     view.webContents.session.setPermissionCheckHandler(() => false);
     window.contentView.addChildView(view);
     view.setVisible(false);
-    view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    view.webContents.setWindowOpenHandler(({ url }) => {
+      if (name === 'youtube') {
+        try {
+          const target = safeWebURL(url);
+          setImmediate(() => { if (!view.webContents.isDestroyed()) view.webContents.loadURL(target).catch(() => {}); });
+        } catch { /* Only web pages can open in the existing browser panel. */ }
+      }
+      return { action: 'deny' };
+    });
     if (name === 'camera') view.webContents.on('login', (event, details, authInfo, callback) => {
       event.preventDefault();
       const origin = new URL(details.url).origin;
@@ -89,9 +97,11 @@ app.whenReady().then(async () => {
       emit('page', { panel: 'camera', state: 'unauthorized', message: '카메라 계정으로 로그인하세요.' });
       emit('camera-auth', { id: cameraAuth.id, origin, realm: authInfo.realm, scheme: authInfo.scheme });
     });
-    view.webContents.on('will-navigate', (event, url) => {
-      if (!['http:', 'https:'].includes(new URL(url).protocol)) event.preventDefault();
-    });
+    const guardNavigation = (event, url) => {
+      try { safeWebURL(url); } catch { event.preventDefault(); }
+    };
+    view.webContents.on('will-navigate', guardNavigation);
+    view.webContents.on('will-redirect', guardNavigation);
     let loadFailed = false;
     view.webContents.on('did-start-navigation', (_event, url, inPlace, mainFrame) => {
       if (mainFrame && !inPlace && /^https?:/.test(url)) {
@@ -99,12 +109,16 @@ app.whenReady().then(async () => {
         emit('page', { panel: name, state: 'loading', url });
       }
     });
-    view.webContents.on('did-navigate', (_event, _url, code) => {
+    view.webContents.on('did-navigate', (_event, url, code) => {
+      emit('page', { panel: name, url });
       if (code >= 200 && code < 400) loadFailed = false;
       if (code >= 400) {
         loadFailed = true;
         emit('page', { panel: name, state: code === 401 ? 'unauthorized' : 'error', message: code === 401 && name === 'camera' ? '카메라 로그인이 필요합니다. 로그인 / 홈에서 시작하세요.' : `HTTP ${code}` });
       }
+    });
+    view.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+      if (isMainFrame) emit('page', { panel: name, url });
     });
     view.webContents.on('did-finish-load', () => {
       if (!loadFailed && /^https?:/.test(view.webContents.getURL())) emit('page', { panel: name, state: 'ready' });
@@ -152,6 +166,10 @@ app.whenReady().then(async () => {
     trusted(event);
     if (!['camera', 'youtube'].includes(name)) throw new Error('잘못된 화면');
     const contents = panels[name].webContents;
+    if (name === 'youtube' && ['google', 'youtube'].includes(action)) {
+      contents.loadURL(action === 'google' ? 'https://www.google.com/' : 'https://www.youtube.com/').catch(() => {});
+      return;
+    }
     if (name === 'camera' && ['home', 'people-counting'].includes(action)) {
       cancelCameraAuth();
       const target = new URL(action === 'home' ? '/' : peopleCountingPath, cameraOrigin).href;
@@ -159,6 +177,7 @@ app.whenReady().then(async () => {
       return;
     }
     if (action === 'back' && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
+    if (action === 'forward' && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
     if (action === 'reload') contents.reload();
     if (action === 'zoom-in') contents.setZoomFactor(Math.min(2, contents.getZoomFactor() + .1));
     if (action === 'zoom-out') contents.setZoomFactor(Math.max(.4, contents.getZoomFactor() - .1));

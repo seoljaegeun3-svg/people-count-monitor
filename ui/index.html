@@ -21,11 +21,11 @@
         <div class="browser-space" id="camera-space"><div><span class="empty-icon">◎</span><h3>카메라 화면</h3><p>카메라와 같은 네트워크에서 연결하세요.<br>로그인은 이 영역에 표시되는 카메라 페이지에서 합니다.</p></div></div>
       </section>
       <div class="divider" role="separator" aria-label="카메라 화면 비율" aria-orientation="vertical" tabindex="0"></div>
-      <section class="panel youtube-panel" aria-label="유튜브">
-        <div class="panel-title"><div><span class="eyebrow">02 / YOUTUBE</span><h2>함께 보는 유튜브</h2></div><span class="status" id="youtube-status">연결 대기</span></div>
-        <form id="youtube-form" class="address-bar"><label class="sr-only" for="youtube-url">유튜브 주소</label><input id="youtube-url" type="url" placeholder="YouTube 영상 주소를 붙여넣으세요" required><button>열기 ↗</button></form>
-        <div class="browser-tools"><span>원하는 영상이나 라이브를 재생하세요</span><div><button data-panel="youtube" data-action="back" aria-label="유튜브 뒤로">←</button><button data-panel="youtube" data-action="reload" aria-label="유튜브 새로고침">↻</button></div></div>
-        <div class="browser-space" id="youtube-space"><div><span class="empty-icon youtube-icon">▶</span><h3>내가 보고 싶은 영상</h3><p>YouTube 웹사이트가 여기에 표시됩니다.</p></div></div>
+      <section class="panel youtube-panel" aria-label="웹 브라우저">
+        <div class="panel-title"><div><span class="eyebrow">02 / WEB</span><h2>유튜브 · 웹 검색</h2></div><span class="status" id="youtube-status">연결 대기</span></div>
+        <form id="youtube-form" class="address-bar"><label class="sr-only" for="youtube-url">웹 주소 또는 구글 검색어</label><input id="youtube-url" type="text" maxlength="4096" placeholder="검색어 또는 웹사이트 주소를 입력하세요" required><button>이동 ↗</button></form>
+        <div class="browser-tools"><div><button data-panel="youtube" data-action="google">Google</button><button data-panel="youtube" data-action="youtube">YouTube</button></div><div><button data-panel="youtube" data-action="back" aria-label="브라우저 뒤로">←</button><button data-panel="youtube" data-action="forward" aria-label="브라우저 앞으로">→</button><button data-panel="youtube" data-action="reload" aria-label="브라우저 새로고침">↻</button></div></div>
+        <div class="browser-space" id="youtube-space"><div><span class="empty-icon youtube-icon">▶</span><h3>영상과 검색을 한곳에서</h3><p>검색어를 입력하면 구글에서 검색합니다.<br>웹사이트 주소나 YouTube 영상 주소도 열 수 있습니다.</p></div></div>
       </section>
     </div>
     <section class="plc-panel" aria-label="PLC 실시간 값">
@@ -40,7 +40,7 @@
     <form id="settings-form">
       <span class="eyebrow">CONNECTION SETTINGS</span><h2>연결 설정</h2><p>기존 PeopleCounter의 LS XGT 기본 설정입니다.<br>실제 PLC 설정과 일치하는지 확인하세요.</p>
       <label>카메라 주소<input id="settings-camera" type="url" required></label>
-      <label>YouTube 시작 주소<input id="settings-youtube" type="url" required></label>
+      <label>브라우저 시작 주소 또는 검색어<input id="settings-youtube" type="text" maxlength="4096" required></label>
       <div class="form-grid"><label>PLC IP<input id="settings-host" required></label><label>TCP 포트<input id="settings-port" type="number" min="1" max="65535" required></label><label>메모리 주소<input id="settings-word" pattern="%MW[0-9]{1,6}" required></label><label>갱신 주기 (ms)<input id="settings-interval" type="number" min="500" max="60000" required></label></div>
       <p class="note">LS XGT Ethernet · unsigned 16-bit word<br>카메라 비밀번호는 여기 저장하지 않습니다.</p>
       <p id="settings-error" role="alert"></p><div class="dialog-actions"><button type="button" id="close-settings">취소</button><button class="primary">저장하고 적용</button></div>

@@ -101,12 +101,13 @@ window.monitor.onPLC(data => {
   $('plc-updated').textContent = ok ? `최근 수신 ${new Date(data.time).toLocaleTimeString('ko-KR')}` : '현재 유효한 값 없음';
 });
 window.monitor.onPage(data => {
-  if (data.url && data.panel === 'camera') $('camera-url').value = data.url;
+  if (data.url) $(`${data.panel}-url`).value = data.url;
+  if (!data.state) return;
   const label = $(`${data.panel}-status`);
   label.className = `status ${data.state === 'ready' ? 'ok' : ['error', 'unauthorized'].includes(data.state) ? 'error' : ''}`;
   label.textContent = data.state === 'ready' ? '페이지 열림' : data.state === 'loading' ? '불러오는 중…' : data.state === 'unauthorized' ? '로그인 필요' : '페이지 연결 실패';
   label.title = data.message || '페이지 로드 상태입니다. 영상 재생 여부는 화면에서 확인하세요.';
-  if (data.state === 'error') toast(`${data.panel === 'camera' ? '카메라' : 'YouTube'}: ${data.message}`);
+  if (data.state === 'error') toast(`${data.panel === 'camera' ? '카메라' : '브라우저'}: ${data.message}`);
 });
 new ResizeObserver(layout).observe(document.querySelector('.workspace'));
 window.addEventListener('resize', layout);

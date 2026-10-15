@@ -1,10 +1,10 @@
 # People Count Monitor
 
-Windows에서 **왼쪽 카메라 웹 뷰어 · 오른쪽 YouTube · 아래 LS PLC `%MW0`**를 함께 보는 데스크톱 프로그램입니다.
+Windows에서 **왼쪽 카메라 웹 뷰어 · 오른쪽 YouTube/구글 검색/웹사이트 · 아래 LS PLC `%MW0`**를 함께 보는 데스크톱 프로그램입니다.
 
 ## 실행
 
-**일반 사용자는 [Windows 다운로드 페이지](https://github.com/seoljaegeun3-svg/people-count-monitor/releases/latest)의 Assets에서 `People-Count-Monitor-1.0.1.exe`를 받아 더블클릭하세요. Node.js 설치는 필요 없습니다.** Source code ZIP은 실행 파일이 아닙니다.
+**일반 사용자는 [Windows 다운로드 페이지](https://github.com/seoljaegeun3-svg/people-count-monitor/releases/latest)의 Assets에서 `People-Count-Monitor-1.0.2.exe`를 받아 더블클릭하세요. Node.js 설치는 필요 없습니다.** Source code ZIP은 실행 파일이 아닙니다.
 
 아래 명령은 소스 코드를 개발하거나 직접 빌드할 때만 사용합니다.
 
@@ -21,7 +21,7 @@ npm start
 npm run dist:win
 ```
 
-결과: `dist/People-Count-Monitor-1.0.1.exe`. 수신 PC에는 Node.js가 필요 없습니다. EXE는 코드 서명되지 않습니다.
+결과: `dist/People-Count-Monitor-1.0.2.exe`. 수신 PC에는 Node.js가 필요 없습니다. EXE는 코드 서명되지 않습니다.
 
 GitHub의 **Actions → Build Windows download → Run workflow**로도 Windows 빌드·모의 PLC 테스트·EXE 배포를 실행할 수 있습니다. 실패한 빌드는 새 다운로드를 게시하지 않습니다.
 
@@ -29,7 +29,7 @@ GitHub의 **Actions → Build Windows download → Run workflow**로도 Windows 
 
 1. 카메라·PLC가 연결된 Windows PC에서 실행합니다.
 2. 기본 주소 `http://192.168.1.100/`에서 시작합니다. 카메라가 HTTP Basic/Digest 인증을 요구하면 앱의 **카메라 로그인** 창에 카메라 아이디·비밀번호를 입력합니다. 웹 로그인 화면이 나오면 그 화면에서 로그인합니다. 로그인 후 왼쪽 상단 **피플카운팅**을 누르면 스크린샷의 WiseAI 페이지를 엽니다. **로그인 / 홈**은 카메라 로그인 시작 화면으로 돌아갑니다. 비밀번호를 주소에 넣지 마세요.
-3. 오른쪽에서 YouTube 영상을 검색하거나 영상 URL을 붙여 넣고 **열기**를 누릅니다. iframe이 아니라 독립 Chromium 화면을 사용합니다. 일부 영상의 DRM·코덱·Google 로그인 정책은 Electron에서 제한될 수 있습니다.
+3. 오른쪽 주소창에 검색어를 입력하고 Enter 또는 **이동**을 누르면 구글에서 검색합니다. `google.com` 같은 웹 주소나 YouTube 영상 URL도 열 수 있습니다. 상단 **Google / YouTube** 버튼으로 바로 이동하고, 뒤로/앞으로/새로고침을 사용할 수 있습니다. 새 창으로 열리는 검색 결과는 같은 오른쪽 화면에 표시합니다. **연결 설정 → 브라우저 시작 주소 또는 검색어**에서 시작 화면을 바꿀 수 있습니다. iframe이 아니라 독립 Chromium 화면을 사용합니다. 일부 영상의 DRM·코덱·Google 로그인 정책은 Electron에서 제한될 수 있습니다.
 4. **연결 설정**에서 PLC IP·포트·워드·주기를 확인합니다. **PLC 연결**을 누르면 읽기가 시작됩니다. 연결 실패 시 자동으로 다시 조회하며 이전 값을 지웁니다. **연결 중지**로 멈춥니다.
 5. 가운데 경계를 드래그해 좌우 비율을 바꿉니다. 키보드로는 경계에 포커스한 뒤 좌우 방향키를 사용합니다. 카메라 상단의 `− / ＋`는 페이지 크기를 조절합니다.
 
@@ -39,7 +39,7 @@ GitHub의 **Actions → Build Windows download → Run workflow**로도 Windows 
 
 ## 설정과 로그인
 
-Electron 사용자 데이터 폴더(`app.getPath('userData')`)의 `settings.json`에 주소·PLC 설정만 저장합니다. Windows 기본 경로는 `%APPDATA%\People Count Monitor\`입니다. 카메라와 YouTube의 쿠키·로그인 세션은 별도의 로컬 브라우저 프로필에 보관합니다. 카메라 비밀번호를 앱 설정에 저장하지 않습니다. 카메라 또는 YouTube 사이트 내 로그아웃을 사용하세요. 인증서 오류를 우회하지 않습니다.
+Electron 사용자 데이터 폴더(`app.getPath('userData')`)의 `settings.json`에 주소·PLC 설정만 저장합니다. Windows 기본 경로는 `%APPDATA%\People Count Monitor\`입니다. 카메라와 오른쪽 웹 브라우저의 쿠키·로그인 세션은 별도의 로컬 브라우저 프로필에 보관합니다. 기존 YouTube 프로필과 설정은 새 버전에서도 사용합니다. 카메라 비밀번호를 앱 설정에 저장하지 않습니다. 카메라 또는 웹사이트 내 로그아웃을 사용하세요. 인증서 오류를 우회하지 않습니다.
 
 앱 로그인 창은 사용자가 연 카메라 주소와 같은 출처의 Basic/Digest 요청에만 표시됩니다. 다른 서버나 프록시 인증에는 카메라 계정을 전달하지 않습니다. HTTP 인증 정보는 현재 Chromium 세션에 사용되며 앱이 평문 설정 파일에 저장하지 않습니다. HTTP 인증으로 로그인한 경우 프로그램을 종료하면 해당 세션이 끝납니다. 이전 버전의 기본 WiseAI 주소가 저장돼 있으면 새 버전은 카메라 홈부터 시작합니다. `401`은 **로그인 필요**, 다른 HTTP 오류는 **페이지 연결 실패**로 표시합니다.
 
@@ -52,7 +52,7 @@ npm run test:camera
 
 외부 장비에 연결하지 않는 로컬 모의 XGT 서버로 읽기 패킷, 분할 응답, 0/65535, 호출 ID 불일치, PLC 오류, 잘못된 길이·블록·워드 크기, 중간 연결 종료, 타임아웃을 검증합니다.
 
-`test:camera`는 실제 Electron/Chromium에서 loopback 모의 서버의 Basic/Digest 로그인, 잘못된 비밀번호 재입력, 취소, 다른 출처 인증 거부, HTTP 401/403 상태, 홈/피플카운팅 바로가기, 설정 파일 비밀번호 미저장을 검증합니다. Windows 데스크톱 또는 가상 디스플레이가 필요하며 외부 사이트 요청은 차단합니다. Windows 배포 workflow는 이 테스트가 통과해야 EXE를 게시합니다.
+`test:camera`는 실제 Electron/Chromium에서 loopback 모의 서버의 Basic/Digest 로그인, 잘못된 비밀번호 재입력, 취소, 다른 출처 인증 거부, HTTP 401/403 상태, 홈/피플카운팅 바로가기, 설정 파일 비밀번호 미저장을 검증합니다. 오른쪽 브라우저의 구글 검색어 처리, 일반 주소, 새 창 링크, 뒤로/앞으로, 바로가기, 시작 주소 저장, 외부 페이지의 권한 격리도 검증합니다. 외부 HTTPS 페이지는 모의 응답을 사용합니다. Windows 데스크톱 또는 가상 디스플레이가 필요하며 외부 네트워크 요청은 보내지 않습니다. Windows 배포 workflow는 이 테스트가 통과해야 EXE를 게시합니다.
 
 실제 Windows GUI, 카메라 영상·로그인, YouTube 영상 재생, 실제 PLC 값의 일치는 현장 PC에서 확인해야 합니다. 카메라와 PLC 사설 IP에 클라우드에서 연결을 시도하지 않습니다.
 
