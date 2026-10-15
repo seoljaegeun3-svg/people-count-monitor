@@ -4,6 +4,10 @@ Windows에서 **왼쪽 카메라 웹 뷰어 · 오른쪽 YouTube · 아래 LS PL
 
 ## 실행
 
+**일반 사용자는 [Windows 다운로드 페이지](https://github.com/seoljaegeun3-svg/1/releases/latest)의 Assets에서 `People-Count-Monitor-1.0.0.exe`를 받아 더블클릭하세요. Node.js 설치는 필요 없습니다.** Source code ZIP은 실행 파일이 아닙니다.
+
+아래 명령은 소스 코드를 개발하거나 직접 빌드할 때만 사용합니다.
+
 Node.js 22 이상을 설치하고 이 폴더에서:
 
 ```powershell
@@ -18,6 +22,8 @@ npm run dist:win
 ```
 
 결과: `dist/People-Count-Monitor-1.0.0.exe`. 수신 PC에는 Node.js가 필요 없습니다. EXE는 코드 서명되지 않습니다.
+
+GitHub의 **Actions → Build Windows download → Run workflow**로도 Windows 빌드·모의 PLC 테스트·EXE 배포를 실행할 수 있습니다. 실패한 빌드는 새 다운로드를 게시하지 않습니다.
 
 ## 사용 방법
 
