@@ -1,12 +1,13 @@
 {
   "name": "people-count-monitor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "카메라·YouTube·LS PLC 피플카운팅 통합 모니터",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test",
+    "test:camera": "electron scripts/camera-smoke.cjs",
     "dist:win": "electron-builder --win portable --x64"
   },
   "devDependencies": {

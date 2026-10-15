@@ -18,6 +18,7 @@ jobs:
           import json, os, sys, urllib.request, urllib.error
           token = os.environ.get('REPO_ADMIN_TOKEN')
           if not token:
+              print('::error::REPO_ADMIN_TOKEN is missing in GitHub repository Actions secrets. A Codex environment secret is a different setting.')
               sys.exit('Add REPO_ADMIN_TOKEN in repository Settings > Secrets and variables > Actions first. Never paste it in workflow inputs or logs.')
           owner = 'seoljaegeun3-svg'
           headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'project-repository-rename'}
@@ -31,6 +32,7 @@ jobs:
                   if error.code == 404 and payload is None:
                       return None
                   message = json.load(error).get('message', 'GitHub request failed')
+                  print(f'::error::{name}: HTTP {error.code}: {message}')
                   sys.exit(f'{name}: HTTP {error.code}: {message}')
           plan = []
           for old, new in [('insurance-ai-marketing', 'people-counter-native'), ('1', 'people-count-monitor')]:
