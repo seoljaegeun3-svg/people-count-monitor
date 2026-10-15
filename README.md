@@ -4,7 +4,7 @@ Windows에서 **왼쪽 카메라 웹 뷰어 · 오른쪽 YouTube · 아래 LS PL
 
 ## 실행
 
-**일반 사용자는 [Windows 다운로드 페이지](https://github.com/seoljaegeun3-svg/1/releases/latest)의 Assets에서 `People-Count-Monitor-1.0.1.exe`를 받아 더블클릭하세요. Node.js 설치는 필요 없습니다.** Source code ZIP은 실행 파일이 아닙니다.
+**일반 사용자는 [Windows 다운로드 페이지](https://github.com/seoljaegeun3-svg/people-count-monitor/releases/latest)의 Assets에서 `People-Count-Monitor-1.0.1.exe`를 받아 더블클릭하세요. Node.js 설치는 필요 없습니다.** Source code ZIP은 실행 파일이 아닙니다.
 
 아래 명령은 소스 코드를 개발하거나 직접 빌드할 때만 사용합니다.
 
@@ -33,7 +33,7 @@ GitHub의 **Actions → Build Windows download → Run workflow**로도 Windows 
 4. **연결 설정**에서 PLC IP·포트·워드·주기를 확인합니다. **PLC 연결**을 누르면 읽기가 시작됩니다. 연결 실패 시 자동으로 다시 조회하며 이전 값을 지웁니다. **연결 중지**로 멈춥니다.
 5. 가운데 경계를 드래그해 좌우 비율을 바꿉니다. 키보드로는 경계에 포커스한 뒤 좌우 방향키를 사용합니다. 카메라 상단의 `− / ＋`는 페이지 크기를 조절합니다.
 
-기본 PLC 설정은 기존 `insurance-ai-marketing` 저장소의 `plc.go`, `settings.go`에서 확인한 **LS XGT Ethernet / 192.168.1.2:2004 / %MW0 / 500ms**입니다. 실제 장비가 이 설정을 사용한다는 확인은 별도로 필요합니다. Modbus TCP용 프로그램은 아닙니다. unsigned 16-bit WORD 원시값(0~65535)을 표시합니다. PLC 내부 값의 의미와 카메라 IN/OUT 집계의 대응은 현장 로직에 따라 달라집니다.
+기본 PLC 설정은 기존 [people-counter-native](https://github.com/seoljaegeun3-svg/people-counter-native) 저장소의 `plc.go`, `settings.go`에서 확인한 **LS XGT Ethernet / 192.168.1.2:2004 / %MW0 / 500ms**입니다. 실제 장비가 이 설정을 사용한다는 확인은 별도로 필요합니다. Modbus TCP용 프로그램은 아닙니다. unsigned 16-bit WORD 원시값(0~65535)을 표시합니다. PLC 내부 값의 의미와 카메라 IN/OUT 집계의 대응은 현장 로직에 따라 달라집니다.
 
 **PLC 쓰기·리셋 명령은 구현하지 않았습니다.** 카메라 IN/OUT 값은 카메라 페이지에서 확인합니다. 자동 추출·정확도 판정 기능은 없습니다. PLC 읽기는 앱을 시작할 때 자동 연결하지 않으며 사용자가 연결 버튼을 누릅니다.
 
@@ -58,9 +58,9 @@ npm run test:camera
 
 ## 저장소 이름
 
-- 이 프로젝트의 권장 GitHub 이름: `people-count-monitor` (현재 체크아웃 이름: `1`).
-- 기존 `insurance-ai-marketing`: 실제 내용은 Go 기반 Windows 네이티브 PeopleCounter와 LS XGT 통신이므로 `people-counter-native` 권장.
+- [people-count-monitor](https://github.com/seoljaegeun3-svg/people-count-monitor): 카메라·YouTube·PLC 통합 모니터. 이전 GitHub 이름은 `1`입니다.
+- [people-counter-native](https://github.com/seoljaegeun3-svg/people-counter-native): Go 기반 Windows 네이티브 PeopleCounter와 LS XGT 통신. 이전 GitHub 이름은 `insurance-ai-marketing`입니다.
 
-GitHub 원격 이름 변경은 별도 관리 API 권한이 필요합니다. 변경이 완료되지 않았다면 각 저장소의 **Settings → General → Repository name → Rename**에서 위 이름을 적용할 수 있습니다. 로컬 폴더 이름만 바꾸는 것으로 GitHub 저장소 이름이 바뀌지는 않습니다.
+두 원격 저장소의 이름 변경을 완료했습니다. 클라우드 체크아웃 경로는 `/workspace/1`이며, Git origin은 새 `people-count-monitor` 주소를 사용합니다.
 
 클라우드의 GitHub 인증 전달 경로 때문에 관리 토큰이 적용되지 않는 경우 **Settings → Secrets and variables → Actions → New repository secret**에 `REPO_ADMIN_TOKEN`으로 기존 관리 토큰을 등록하고 **Actions → Rename project repositories → Run workflow**를 실행합니다. workflow는 등록한 GitHub Secret을 사용해 GitHub runner에서 위 두 저장소를 변경합니다. 누락된 Secret·접근 실패·이름 충돌은 변경 전에 중단하고, 완료된 이름 변경은 다시 실행해도 건너뜁니다. 토큰 값을 채팅이나 workflow 입력값에 넣지 마세요.
