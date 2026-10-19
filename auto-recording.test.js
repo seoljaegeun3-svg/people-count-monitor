@@ -7,6 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 async function fixture(t, convert, filesystem = fs, options = {}) {
+  const { autoWatermark = true, timers, ...managerOptions } = options;
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'people-count-auto-test-'));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
   const conversions = [], statuses = [], errors = [];
@@ -19,14 +20,16 @@ async function fixture(t, convert, filesystem = fs, options = {}) {
     else await fs.writeFile(destination, 'complete MP4');
     return { path: destination, bytes: (await fs.stat(destination)).size };
   };
-  vm.runInNewContext('(function(require,module){' + source + '\n})', { Buffer })(
+  vm.runInNewContext('(function(require,module){' + source + '\n})', { Buffer,
+    setTimeout: timers?.setTimeout || setTimeout, clearTimeout: timers?.clearTimeout || clearTimeout })(
     name => name === './mp4' ? { concatToMP4: converter } : name === 'node:fs/promises' ? filesystem : require(name), module);
   let time = 1_000_000;
-  const manager = await module.exports.createAutoRecording({ folder, ...options, now: () => time,
+  const manager = await module.exports.createAutoRecording({ folder, ...managerOptions, now: () => time,
     onStatus: status => statuses.push(status), onError: error => errors.push(error) });
   const setTime = value => { time = 1_000_000 + value; };
   const segment = async (start, end) => {
     setTime(end);
+    if (autoWatermark) manager.onObservation({ at: 1_000_000 + end, healthy: true });
     return manager.segment(Buffer.from(`${start}-${end}`), { start: 1_000_000 + start, end: 1_000_000 + end });
   };
   const feed = async (start, end) => { for (let i = start; i < end; i += 2000) await segment(i, i + 2000); };
@@ -237,8 +240,8 @@ test('encoder cleanup and incoming-segment cleanup do not remove each other\'s s
 
 async function observedPassage(t, { values = time => time >= 10000 ? 6 : 5,
   events = [{ at: 10000, direction: 'in' }], uncertainty, motion = false, plcAvailable = true,
-  observationFilter = () => true } = {}) {
-  const f = await fixture(t, undefined, fs, { mapping: 'occupancy' });
+  observationFilter = () => true, beforeClose = () => {}, timers } = {}) {
+  const f = await fixture(t, undefined, fs, { mapping: 'occupancy', autoWatermark: false, timers });
   for (let time = 0; time <= 20000; time += 500) {
     f.setTime(time);
     if (plcAvailable) f.plc(values(time));
@@ -248,6 +251,7 @@ async function observedPassage(t, { values = time => time >= 10000 ? 6 : 5,
     if (motion && time === 10000) f.manager.onMotion({ at: 1_000_000 + time });
     if (time && time % 2000 === 0) await f.segment(time - 2000, time);
   }
+  await beforeClose(f);
   const result = await f.manager.close();
   const files = await fs.readdir(f.folder);
   const reviews = [];
@@ -334,4 +338,105 @@ test('matching counts with a long observation gap retain the video even when bot
   assert(f.reviews[0].reasons.some(reason => /분석|영상/.test(reason)));
   assert.match(path.basename(f.result.path), /^People-Count-Review-/);
   assert.equal(f.conversions.length, 1);
+});
+
+function controlledTimers() {
+  const pending = new Map();
+  let sequence = 0;
+  return {
+    pending,
+    setTimeout(callback, delay) { const id = ++sequence; pending.set(id, { callback, delay }); return id; },
+    clearTimeout(id) { pending.delete(id); },
+    fire() { for (const [id, timer] of [...pending]) { pending.delete(id); timer.callback(); } }
+  };
+}
+
+test('a sealed clip waits for late AI uncertainty before deciding whether its video can be removed', async t => {
+  const f = await observedPassage(t, { observationFilter: time => time < 19500,
+    beforeClose(f) {
+      assert.equal(f.conversions.length, 0);
+      assert(!f.statuses.some(value => value.state === 'matched'), 'segment end alone cannot certify the unfinished frame');
+      f.manager.onObservation({ at: 1_019_500, events: [], uncertain: ['통행선 사람 추적이 불확실합니다.'], healthy: true });
+      assert(!f.statuses.some(value => value.state === 'matched'));
+      f.manager.onObservation({ at: 1_020_000, events: [], healthy: true });
+    } });
+  assert.equal(f.result.error, '');
+  assert.equal(f.result.saved, 1);
+  assert.equal(f.result.matched, 0);
+  assert.equal(f.reviews[0].status, 'uncertain');
+  assert(f.reviews[0].reasons.includes('통행선 사람 추적이 불확실합니다.'));
+  assert.equal(f.reviews[0].video, f.result.path);
+});
+
+test('late healthy observations permit a match only after analysis reaches the clip end', async t => {
+  const f = await observedPassage(t, { observationFilter: time => time < 19500,
+    beforeClose(f) {
+      assert(!f.statuses.some(value => value.state === 'matched'));
+      f.manager.onObservation({ at: 1_019_500, events: [], healthy: true });
+      assert(!f.statuses.some(value => value.state === 'matched'));
+      f.manager.onObservation({ at: 1_020_000, events: [], healthy: true });
+    } });
+  assert.equal(f.result.saved, 0);
+  assert.equal(f.result.matched, 1);
+  assert.equal(f.conversions.length, 0);
+  assert.equal(f.reviews[0].status, 'matched');
+  assert.equal(f.files.length, 1);
+  assert.match(f.files[0], /\.jsonl$/);
+});
+
+test('uncertainty in the first completed frame beyond the boundary also protects the preceding clip', async t => {
+  const f = await observedPassage(t, { observationFilter: time => time < 20000,
+    beforeClose(f) {
+      f.manager.onObservation({ at: 1_020_250, events: [], uncertain: ['직전 프레임의 사람 추적이 끊겼습니다.'], healthy: true });
+    } });
+  assert.equal(f.result.saved, 1);
+  assert.equal(f.result.matched, 0);
+  assert.equal(f.reviews[0].status, 'uncertain');
+  assert(f.reviews[0].reasons.includes('직전 프레임의 사람 추적이 끊겼습니다.'));
+});
+
+test('closing with an unfinished AI frame preserves the clip immediately and clears its deadline timer', async t => {
+  const timers = controlledTimers();
+  const f = await observedPassage(t, { observationFilter: time => time < 19500, timers,
+    beforeClose() { assert.equal(timers.pending.size, 1); } });
+  assert.equal(timers.pending.size, 0);
+  assert.equal(f.result.saved, 1);
+  assert.equal(f.result.matched, 0);
+  assert.equal(f.reviews[0].status, 'uncertain');
+  assert(f.reviews[0].reasons.some(reason => reason.includes('구간 끝까지 영상 분석')));
+});
+
+test('a two-second analysis deadline preserves the video instead of blocking capture indefinitely', async t => {
+  const timers = controlledTimers();
+  const f = await observedPassage(t, { observationFilter: time => time < 19500, timers,
+    beforeClose() {
+      assert.equal(timers.pending.size, 1);
+      assert.equal([...timers.pending.values()][0].delay, 2000);
+      timers.fire();
+    } });
+  assert.equal(timers.pending.size, 0);
+  assert.equal(f.result.saved, 1);
+  assert.equal(f.result.matched, 0);
+  assert(f.reviews[0].reasons.some(reason => reason.includes('2초')));
+  assert.equal(f.result.error, '', 'a slow AI result preserves evidence without stopping automatic recording');
+});
+
+test('pending review retains its history and source references while later segments continue arriving', async t => {
+  const timers = controlledTimers();
+  const f = await observedPassage(t, { observationFilter: time => time < 19500, timers,
+    async beforeClose(f) {
+      for (let time = 20500; time <= 50000; time += 500) {
+        f.setTime(time); f.plc(6);
+        if (time % 2000 === 0) await f.segment(time - 2000, time);
+      }
+      const [working] = (await fs.readdir(f.folder)).filter(name => name.startsWith('.people-count-auto-'));
+      assert(await fs.stat(path.join(f.folder, working, 'segment-00000003.webm')), 'pending pre-roll must not be evicted');
+      f.manager.onObservation({ at: 1_019_500, events: [], healthy: true });
+      f.manager.onObservation({ at: 1_020_000, events: [], healthy: true });
+    } });
+  assert.equal(f.result.saved, 0);
+  assert.equal(f.result.matched, 1);
+  assert.deepEqual([f.reviews[0].videoIn, f.reviews[0].plcIn], [1, 1], 'pending review keeps the original comparison history');
+  assert.equal(timers.pending.size, 0);
+  assert(!f.files.some(name => name.startsWith('.people-count-auto-')));
 });

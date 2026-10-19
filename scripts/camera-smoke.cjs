@@ -369,13 +369,18 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
 
   // Render a known CC0 person in the actual camera WebContentsView. The model
   // sees captured pixels from this page; no detections or crossings are mocked.
+  // Exercise a compact desktop too: Windows runners expose less space than the
+  // large Linux virtual screen, especially beneath the browser/header controls.
+  win.setContentSize(Math.min(originalSize[0], 1000), Math.min(originalSize[1], 650));
+  await until(() => { nativeBoundsFit(); return true; }, 'compact comparison camera layout');
   const personFixture = require('./person-fixture.cjs');
   const personImage = `data:image/png;base64,${fs.readFileSync(personFixture.fixturePath).toString('base64')}`;
   await camera.executeJavaScript(`(async () => {
     clearInterval(window.fixtureRenderTimer);
     const image = new Image(); image.src = ${JSON.stringify(personImage)}; await image.decode();
     const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 360;
-    canvas.style.cssText = 'position:fixed;left:0;top:0;width:640px;height:360px';
+    const scale = Math.min(1, innerWidth / 640, innerHeight / 360);
+    canvas.style.cssText = 'position:fixed;left:0;top:0;width:' + 640*scale + 'px;height:' + 360*scale + 'px';
     document.body.style.background = 'rgb(20,25,30)'; document.body.replaceChildren(canvas);
     const context = canvas.getContext('2d');
     window.drawFixturePerson = centerX => {
@@ -384,16 +389,27 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
     };
     window.drawFixturePerson(.2); return true;
   })()`);
+  const fixtureRegion = await camera.executeJavaScript(`(() => {
+    const rect = document.querySelector('canvas').getBoundingClientRect();
+    return { x:rect.x / innerWidth, y:rect.y / innerHeight, width:rect.width / innerWidth, height:rect.height / innerHeight,
+      pixelWidth:rect.width, pixelHeight:rect.height, viewportWidth:innerWidth, viewportHeight:innerHeight };
+  })()`);
+  assert(fixtureRegion.pixelWidth > 0 && fixtureRegion.pixelHeight > 0, 'fixture video has visible pixel dimensions');
+  assert(Math.abs(fixtureRegion.pixelWidth / fixtureRegion.pixelHeight - 640 / 360) < .001, 'responsive fixture preserves the complete video aspect ratio');
+  assert(fixtureRegion.x >= 0 && fixtureRegion.y >= 0 && fixtureRegion.x + fixtureRegion.width <= 1.001 && fixtureRegion.y + fixtureRegion.height <= 1.001,
+    'the complete fixture video must fit within the native camera viewport');
   // Exercise the same preview/calibration form used by the operator. Its source
   // key is trusted main-process state, rather than a value supplied by a test.
   await ui("document.getElementById('comparison-settings').click(); true;");
   await until(() => ui("document.getElementById('comparison-dialog').open"), 'camera comparison preview opens');
   const previewSize = await ui("({width:document.getElementById('comparison-canvas').width,height:document.getElementById('comparison-canvas').height})");
-  assert(previewSize.width >= 640 && previewSize.height >= 360, 'camera preview contains the whole fixture video area');
+  assert(previewSize.width > 0 && previewSize.height > 0, 'camera preview contains a captured frame');
+  assert(Math.abs(previewSize.width / previewSize.height - fixtureRegion.viewportWidth / fixtureRegion.viewportHeight) < .02,
+    'comparison preview preserves the native camera viewport aspect ratio');
   await ui(`(() => {
-    const fields = { 'comparison-region-x':0, 'comparison-region-y':0,
-      'comparison-region-width':${640 / previewSize.width * 100},
-      'comparison-region-height':${360 / previewSize.height * 100},
+    const fields = { 'comparison-region-x':${fixtureRegion.x * 100}, 'comparison-region-y':${fixtureRegion.y * 100},
+      'comparison-region-width':${fixtureRegion.width * 100},
+      'comparison-region-height':${fixtureRegion.height * 100},
       'comparison-axis':'vertical', 'comparison-line':50, 'comparison-mapping':'occupancy',
       'comparison-confidence':45, 'comparison-sensitivity':'normal' };
     for (const [id, value] of Object.entries(fields)) {
@@ -408,6 +424,8 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
   assert.equal(comparison.mapping, 'occupancy');
   assert.equal(comparison.line.axis, 'vertical');
   assert.equal(comparison.line.position, .5);
+  for (const key of ['x', 'y', 'width', 'height']) assert(Math.abs(comparison.region[key] - fixtureRegion[key]) < .003,
+    `saved comparison ${key} follows the complete responsive fixture video`);
   assert(comparison.source?.key, 'saved comparison is bound to the captured camera source');
   console.log('PASS: actual camera preview, video-area calibration, passage direction, occupancy mapping, and trusted source key');
 

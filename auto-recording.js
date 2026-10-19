@@ -11,19 +11,20 @@ async function createAutoRecording({ folder, mapping = 'unknown', onStatus = () 
   folder = path.resolve(folder);
   await fs.mkdir(folder, { recursive: true });
   const working = await fs.mkdtemp(path.join(folder, '.people-count-auto-'));
-  const segments = [], queue = [], plcSamples = [], crossings = [], uncertainties = [], observations = [];
+  const segments = [], pendingReviews = [], queue = [], plcSamples = [], crossings = [], uncertainties = [], observations = [];
   const logPath = path.join(folder, `People-Count-Review-${new Date(now()).toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.jsonl`);
   let baseline, active, saved = 0, matched = 0, sequence = 0, failure = '', lastPath = '', latestEnd = 0, log;
   let writes = Promise.resolve(), encoding, closing = false, closeResult, pendingBytes = 0, preserveWorking = false;
 
   function status(state, message, extra = {}) {
     try { onStatus({ state: failure ? 'error' : state, message: failure || message, saved, matched, active: !!active,
-      queued: queue.length + (encoding ? 1 : 0), ...extra }); } catch { /* A closing UI must not interrupt saving. */ }
+      queued: pendingReviews.length + queue.length + (encoding ? 1 : 0), ...extra }); } catch { /* A closing UI must not interrupt saving. */ }
   }
   function trimHistory() {
     // Completed segments can begin before the requested pre-roll boundary.
     // Keep enough history for the largest accepted renderer segment too.
-    const cutoff = (active?.start ?? now() - PRE_ROLL) - 15_000;
+    let cutoff = (active?.start ?? now() - PRE_ROLL) - 15_000;
+    for (const clip of pendingReviews) cutoff = Math.min(cutoff, clip.parts[0].start);
     for (const list of [plcSamples, observations]) {
       // Preserve a sample before the window as the comparison baseline.
       while (list.length > 1 && list[1].at < cutoff) list.shift();
@@ -123,28 +124,55 @@ async function createAutoRecording({ folder, mapping = 'unknown', onStatus = () 
         active ? '영상·PLC 비교 중 · 마지막 감지 뒤 10초까지 확인' : `AI 비교 대기 · 확인 영상 ${saved}개 / 일치 ${matched}구간`);
     });
   }
-  function seal() {
-    const clip = active;
-    active = null;
-    if (!clip?.parts.length) return;
-    clip.name = `${new Date(clip.parts[0].start).toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
+  function completeReview(clip, incomplete = '') {
+    const pendingIndex = pendingReviews.indexOf(clip);
+    if (pendingIndex < 0) return;
+    pendingReviews.splice(pendingIndex, 1);
+    clearTimeout(clip.reviewTimer);
     const start = clip.parts[0].start, end = clip.parts.at(-1).end;
     const samples = observations.filter(value => value.at >= start && value.at < end);
     const doubts = uncertainties.filter(value => value.at >= start && value.at < end);
+    const completion = observations.find(value => value.at >= end);
+    if (incomplete || !completion) {
+      doubts.push({ at: start, reason: incomplete || '구간 끝까지 영상 분석이 완료되지 않아 확인이 필요합니다.' });
+    } else {
+      // The first completed frame beyond the boundary also describes movement
+      // since the previous frame, which may lie inside this clip. Do not discard
+      // its uncertainty merely because its timestamp is outside [start, end).
+      for (const doubt of uncertainties) if (doubt.at === completion.at) doubts.push({ at: start, reason: doubt.reason });
+      if (!completion.healthy) doubts.push({ at: start, reason: '구간 끝의 영상 분석을 정상적으로 완료하지 못했습니다.' });
+    }
     if (!samples.length || samples[0].at - start > 2000 || end - samples.at(-1).at > 2000) {
       doubts.push({ at: start, reason: '비교 구간 전체의 영상 분석을 확인하지 못했습니다.' });
     }
     if (samples.some((sample, index) => !sample.healthy || (index > 0 && sample.at - samples[index - 1].at > 2000))) {
       doubts.push({ at: start, reason: '비교 구간 중 영상 분석이 중단된 시간이 있습니다.' });
     }
-    if (closing && end < clip.deadline) doubts.push({ at: start, reason: '자동 녹화를 꺼 통행 후 확인 시간이 끝나기 전에 저장했습니다.' });
+    if (clip.truncatedAtClose) doubts.push({ at: start, reason: '자동 녹화를 꺼 통행 후 확인 시간이 끝나기 전에 저장했습니다.' });
     if (clip.split) doubts.push({ at: start, reason: '통행이 이어져 구간을 나눴으므로 경계의 통행을 확인해야 합니다.' });
     clip.review = comparePassage({ start, end, mapping, crossings, plcSamples, uncertainties: doubts, motionCandidate: clip.motionCandidate });
-    // One overflow clip is retained for recovery while onError stops capture.
-    // No event is silently dropped when the encoder cannot keep up.
-    if (queue.length + (encoding ? 1 : 0) >= MAX_PENDING) fail(new Error('MP4 저장이 녹화 속도를 따라가지 못해 자동 녹화를 중지합니다. 수집한 원본은 보존합니다.'));
     queue.push(clip);
     pump();
+  }
+  function finishCompletedReviews() {
+    for (const clip of [...pendingReviews]) {
+      if (observations.some(value => value.at >= clip.parts.at(-1).end)) completeReview(clip);
+    }
+  }
+  function seal() {
+    const clip = active;
+    active = null;
+    if (!clip?.parts.length) return;
+    clip.name = `${new Date(clip.parts[0].start).toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`;
+    clip.truncatedAtClose = closing && clip.parts.at(-1).end < clip.deadline;
+    // Keep references while the last captured frame is still being analyzed.
+    // One overflow clip is retained while onError requests a capture stop.
+    if (pendingReviews.length + queue.length + (encoding ? 1 : 0) >= MAX_PENDING) fail(new Error('MP4 저장이 녹화 속도를 따라가지 못해 자동 녹화를 중지합니다. 수집한 원본은 보존합니다.'));
+    pendingReviews.push(clip);
+    clip.reviewTimer = setTimeout(() => {
+      completeReview(clip, '구간 끝의 영상 분석 완료를 2초 안에 확인하지 못해 영상을 보관합니다.');
+    }, 2000);
+    finishCompletedReviews();
   }
   function candidate(at, motionCandidate = false) {
     if (closing || failure) return;
@@ -165,6 +193,7 @@ async function createAutoRecording({ folder, mapping = 'unknown', onStatus = () 
     for (const reason of uncertain) uncertainties.push({ at, reason: String(reason) });
     if (!healthy && !uncertain.length) uncertainties.push({ at, reason: '카메라 영상 분석을 확인하지 못했습니다.' });
     if (events.length) candidate(at, true);
+    finishCompletedReviews();
     trimHistory();
   }
   function onPLC(data) {
@@ -230,6 +259,8 @@ async function createAutoRecording({ folder, mapping = 'unknown', onStatus = () 
       await writes;
       if (error) fail(error instanceof Error ? error : new Error(String(error)));
       seal();
+      for (const clip of [...pendingReviews]) completeReview(clip,
+        '자동 녹화를 꺼 구간 끝까지 영상 분석이 완료되었는지 확인하지 못했습니다.');
       while (encoding || queue.length) { pump(); await encoding; }
       if (log) { await log.close(); log = null; }
       await cleanup(true);
