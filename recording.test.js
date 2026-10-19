@@ -11,6 +11,8 @@ async function mainHarness(t) {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'people-count-recording-'));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
   const handlers = new Map(), timers = new Map();
+  let notifyConversion;
+  const conversionStarted = new Promise(resolve => { notifyConversion = resolve; });
   const controls = {
     filePath: path.join(folder, 'recording.mp4'), canceled: false, convertCalls: [],
     sources: [{ id: 'window:88:0', name: 'People Count Monitor' }, { id: 'window:17:0', name: 'own window' }]
@@ -48,6 +50,7 @@ async function mainHarness(t) {
   const conversion = {
     async convertToMP4(source, destination, onProgress) {
       controls.convertCalls.push({ source, destination });
+      notifyConversion();
       onProgress({ state: 'converting', message: 'MP4 변환 중…' });
       if (controls.holdConversion) await controls.holdConversion;
       if (controls.convertFailure) throw new Error('fixture conversion failure');
@@ -74,7 +77,7 @@ async function mainHarness(t) {
     await capture();
     return job;
   }
-  return { controls, contents, window, handlers, timers, invoke, capture, prepare };
+  return { controls, contents, window, handlers, timers, invoke, capture, prepare, conversionStarted };
 }
 
 // Real filesystem writes exercise ordering and protection against data loss;
@@ -158,7 +161,7 @@ test('recording cancellation removes only its empty file and close waits for the
   await assert.rejects(fs.stat(h.controls.convertCalls[0].source), { code: 'ENOENT' });
 });
 
-test('MP4 failure preserves the raw recording and close waits for an active conversion', async t => {
+test('MP4 failure preserves the raw recording and close waits for an active conversion', { timeout: 5000 }, async t => {
   const h = await mainHarness(t);
   const job = await h.prepare();
   await h.invoke('start', { id: job.id });
@@ -167,7 +170,7 @@ test('MP4 failure preserves the raw recording and close waits for an active conv
   let release;
   h.controls.holdConversion = new Promise(resolve => { release = resolve; });
   const finishing = h.invoke('finish', job.id);
-  for (let attempts = 0; attempts < 100 && !h.controls.convertCalls.length; attempts++) await new Promise(setImmediate);
+  await h.conversionStarted;
   assert.equal(h.controls.convertCalls.length, 1);
   h.window.close();
   assert.equal(h.window.destroyed, undefined);
@@ -183,7 +186,7 @@ test('MP4 failure preserves the raw recording and close waits for an active conv
   await assert.rejects(fs.stat(h.controls.filePath), { code: 'ENOENT' });
 });
 
-test('existing WebM conversion preserves the input and rejects overlapping recording or conversion', async t => {
+test('existing WebM conversion preserves the input and rejects overlapping recording or conversion', { timeout: 5000 }, async t => {
   const h = await mainHarness(t);
   const source = path.join(path.dirname(h.controls.filePath), 'old-recording.webm');
   await fs.writeFile(source, 'old source stays intact');
@@ -191,7 +194,7 @@ test('existing WebM conversion preserves the input and rejects overlapping recor
   let release;
   h.controls.holdConversion = new Promise(resolve => { release = resolve; });
   const conversion = h.invoke('convert');
-  for (let attempts = 0; attempts < 100 && !h.controls.convertCalls.length; attempts++) await new Promise(setImmediate);
+  await h.conversionStarted;
   assert.equal(h.controls.convertCalls.length, 1);
   await assert.rejects(async () => h.invoke('prepare', {}), /이미 녹화 중이거나/);
   await assert.rejects(h.invoke('convert'), /녹화·저장·변환/);

@@ -18,7 +18,17 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm test -- --test-reporter=github
+      - name: Test PLC and MP4 conversion
+        shell: pwsh
+        run: |
+          $testLog = & npm test 2>&1
+          $testExit = $LASTEXITCODE
+          $testLog | ForEach-Object { Write-Output $_ }
+          if ($testExit -ne 0) {
+            $details = ($testLog -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows tests failed::$details"
+          }
+          exit $testExit
       - run: npm run test:camera
       - run: npm run dist:win -- --config.win.signAndEditExecutable=false
       - run: npm run test:packaged
