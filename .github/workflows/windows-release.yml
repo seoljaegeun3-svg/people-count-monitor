@@ -18,7 +18,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm test
+      - run: npm test -- --test-reporter=github
       - run: npm run test:camera
       - run: npm run dist:win -- --config.win.signAndEditExecutable=false
       - run: npm run test:packaged
