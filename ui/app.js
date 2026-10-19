@@ -132,13 +132,16 @@ $('settings-form').addEventListener('submit', async event => {
 });
 $('plc-connect').addEventListener('click', async () => {
   try {
-    await window.monitor.connect(!connected);
-    connected = !connected;
+    const nextConnection = !connected;
+    await window.monitor.connect(nextConnection);
+    connected = nextConnection;
     $('plc-connect').textContent = connected ? '연결 중지' : 'PLC 연결';
   } catch (error) { toast(error.message); }
 });
 window.monitor.onPLC(data => {
   const ok = data.state === 'ok';
+  connected = data.state !== 'off';
+  $('plc-connect').textContent = connected ? '연결 중지' : 'PLC 연결';
   $('plc-value').textContent = ok ? String(data.value) : '—';
   $('plc-status').className = `status ${ok ? 'ok' : data.state === 'error' ? 'error' : ''}`;
   $('plc-status').textContent = { ok: '● 실시간 수신', error: '● 통신 오류', off: '연결 중지', connecting: '연결 중…' }[data.state];

@@ -44,7 +44,10 @@ async function mainHarness(t) {
       showOpenDialog: async () => ({ canceled: controls.openCanceled === true, filePaths: controls.openPath ? [controls.openPath] : [] })
     },
     desktopCapturer: { getSources: async () => controls.sources },
-    shell: { showItemInFolder(filePath) { controls.revealed = filePath; } }
+    shell: {
+      showItemInFolder(filePath) { controls.revealed = filePath; },
+      async openPath(folder) { controls.revealed = folder; return ''; }
+    }
   };
   const module = { exports: {} };
   const conversion = {
@@ -58,13 +61,32 @@ async function mainHarness(t) {
       return { path: destination, bytes: (await fs.stat(destination)).size, error: '' };
     }
   };
+  const automatic = {
+    async createAutoRecording(options) {
+      controls.autoOptions = options;
+      controls.autoSegments = [];
+      controls.autoPLC = [];
+      return {
+        async segment(buffer, timing) {
+          if (controls.autoWriteFailure) throw new Error('fixture auto disk full');
+          controls.autoSegments.push({ buffer, timing });
+        },
+        onPLC(data) { controls.autoPLC.push(data); },
+        async close(error) {
+          controls.autoCloseError = error;
+          if (controls.holdAutoClose) await controls.holdAutoClose;
+          return { saved: 0, folder: options.folder, path: options.folder, error: error || '' };
+        }
+      };
+    }
+  };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, 'recording.js'), 'utf8'), {
-    require: name => name === 'electron' ? electron : name === './mp4' ? conversion : require(name), module, __dirname,
+    require: name => name === 'electron' ? electron : name === './mp4' ? conversion : name === './auto-recording' ? automatic : require(name), module, __dirname,
     Buffer, ArrayBuffer, process: { platform: 'win32' }, setImmediate,
     setTimeout(callback, milliseconds) { const timer = {}; timers.set(timer, { callback, milliseconds }); return timer; },
     clearTimeout(timer) { timers.delete(timer); }
   });
-  module.exports.installRecording(window);
+  const controller = module.exports.installRecording(window, { onAutoStart() { controls.autoStarted = true; } });
   const event = { sender: contents, senderFrame: contents.mainFrame };
   const invoke = (name, ...args) => handlers.get(`recording:${name}`)(event, ...args);
   async function capture(frame = contents.mainFrame) {
@@ -77,7 +99,7 @@ async function mainHarness(t) {
     await capture();
     return job;
   }
-  return { controls, contents, window, handlers, timers, invoke, capture, prepare, conversionStarted };
+  return { controls, contents, window, handlers, timers, invoke, capture, prepare, conversionStarted, controller, folder };
 }
 
 // Real filesystem writes exercise ordering and protection against data loss;
@@ -206,4 +228,54 @@ test('existing WebM conversion preserves the input and rejects overlapping recor
   assert.equal(await fs.readFile(result.path, 'utf8'), 'old source stays intact');
   h.controls.openCanceled = true;
   assert.equal((await h.invoke('convert')).cancelled, true);
+});
+
+test('automatic recording accepts only trusted bounded segments and forwards actual PLC readings', async t => {
+  const h = await mainHarness(t);
+  h.controls.openPath = h.folder;
+  const job = await h.prepare({ automatic: true });
+  await assert.rejects(h.invoke('start', { id: job.id }), /녹화를 시작할 수 없습니다/);
+  const started = await h.invoke('auto-start', { id: job.id });
+  assert.equal(started.folder, h.folder);
+  assert.equal(h.controls.autoStarted, true);
+  h.controller.onPLC({ state: 'ok', value: 7 });
+  assert.equal(h.controls.autoPLC[0].value, 7);
+  const timing = { start: Date.now() - 2000, end: Date.now() };
+  await h.invoke('auto-segment', job.id, new TextEncoder().encode('complete WebM segment'), timing);
+  assert.equal(h.controls.autoSegments.length, 1);
+  assert.equal(h.controls.autoSegments[0].buffer.toString(), 'complete WebM segment');
+  await assert.rejects(h.invoke('auto-segment', job.id, new Uint8Array(8 * 1024 * 1024 + 1), timing), /저장 속도/);
+  await assert.rejects(h.invoke('auto-segment', job.id, new Uint8Array(2), { start: 0, end: 16000 }), /녹화 시간/);
+  await assert.rejects(async () => h.handlers.get('recording:auto-segment')({ sender: {}, senderFrame: h.contents.mainFrame }, job.id, new Uint8Array(2), timing), /허용되지 않은/);
+  await assert.rejects(h.invoke('convert'), /녹화·저장·변환/);
+  await h.invoke('reveal');
+  assert.equal(h.controls.revealed, h.folder);
+  await h.invoke('finish', job.id);
+  h.controller.onPLC({ state: 'ok', value: 8 });
+  assert.equal(h.controls.autoPLC.length, 1, 'stop disconnects the automatic PLC consumer');
+});
+
+test('automatic cancellation and write failure release capture, while closing waits for saved clips', async t => {
+  const h = await mainHarness(t);
+  h.controls.openCanceled = true;
+  let job = await h.prepare({ automatic: true });
+  assert.equal((await h.invoke('auto-start', { id: job.id })).cancelled, true);
+  h.controls.openCanceled = false;
+  h.controls.openPath = h.folder;
+  job = await h.prepare({ automatic: true });
+  await h.invoke('auto-start', { id: job.id });
+  h.controls.autoWriteFailure = true;
+  await assert.rejects(h.invoke('auto-segment', job.id, new Uint8Array(2), { start: 0, end: 2000 }), /auto disk full/);
+  assert.equal(h.controls.lastMessage, 'recording:stop');
+  let release;
+  h.controls.holdAutoClose = new Promise(resolve => { release = resolve; });
+  const finishing = h.invoke('finish', job.id);
+  h.window.close();
+  assert.equal(h.window.destroyed, undefined);
+  assert.equal([...h.timers.values()].some(timer => timer.milliseconds === 12_000), false, 'automatic conversion is not force-closed after twelve seconds');
+  release();
+  const result = await finishing;
+  await new Promise(setImmediate);
+  assert.equal(h.window.destroyed, true);
+  assert.match(result.error, /auto disk full/);
 });

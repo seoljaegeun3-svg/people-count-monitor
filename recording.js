@@ -3,8 +3,9 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { randomUUID } = require('node:crypto');
 const { convertToMP4 } = require('./mp4');
+const { createAutoRecording } = require('./auto-recording');
 
-function installRecording(window) {
+function installRecording(window, { onAutoStart = () => {} } = {}) {
   const { app, desktopCapturer, dialog, ipcMain, shell } = require('electron');
   const contents = window.webContents;
   const session = contents.session;
@@ -31,6 +32,14 @@ function installRecording(window) {
       try { contents.send('recording:progress', value); } catch { /* Finish saving if the UI exits. */ }
     }
   }
+  function automaticError(job, cause) {
+    job.error ||= cause instanceof Error ? cause : new Error(String(cause));
+    if (current !== job) return;
+    progress({ mode: 'auto', state: 'error', message: job.error.message });
+    if (!contents.isDestroyed()) {
+      try { contents.send('recording:stop'); } catch { /* The source files remain available after a renderer exit. */ }
+    }
+  }
   async function unusedDestination(filePath) {
     if (path.extname(filePath).toLowerCase() !== '.mp4') throw new Error('파일 이름의 확장자를 .mp4로 지정하세요.');
     try {
@@ -51,6 +60,23 @@ function installRecording(window) {
     if (job.finishing) return job.finishing;
     clearTimeout(job.captureTimer);
     job.finishing = (async () => {
+      if (job.automatic) {
+        clearTimeout(closeTimer);
+        let result;
+        try {
+          const closed = await job.auto?.close(job.error?.message || message);
+          const savedPath = closed?.path || job.autoFolder || '';
+          const bytes = savedPath ? await fs.stat(savedPath).then(stat => stat.isDirectory() ? 1 : stat.size).catch(() => 0) : 0;
+          result = { id: job.id, path: savedPath, bytes, saved: 0, ...closed, error: closed?.error || job.error?.message || message || '' };
+        } catch (cause) {
+          result = { id: job.id, path: job.autoFolder || '', bytes: 0, saved: 0, error: `자동 녹화 종료 오류: ${cause.message}. 원본 폴더를 확인하세요.` };
+        }
+        lastResult = result;
+        if (result.bytes) lastSaved = result;
+        if (current === job) current = null;
+        resumeClose();
+        return result;
+      }
       await job.writes;
       let error = job.error?.message || message;
       if (job.file) {
@@ -117,7 +143,7 @@ function installRecording(window) {
     if (options?.audio && process.platform !== 'win32') throw new Error('PC 소리 녹음은 Windows에서 사용할 수 있습니다.');
     current = {
       id: randomUUID(), path: '', file: null, bytes: 0, queuedBytes: 0,
-      writes: Promise.resolve(), audio: options?.audio === true,
+      writes: Promise.resolve(), audio: options?.audio === true, automatic: options?.automatic === true,
       capturePending: true, captureDeadline: Date.now() + 60_000
     };
     const job = current;
@@ -132,7 +158,7 @@ function installRecording(window) {
   ipcMain.handle('recording:start', async (event, options) => {
     trusted(event);
     const job = active(options?.id);
-    if (preparing || job.file || job.finishing || job.capturePending || closeRequested) throw new Error('녹화를 시작할 수 없습니다. 다시 시도하세요.');
+    if (job.automatic || preparing || job.file || job.finishing || job.capturePending || closeRequested) throw new Error('녹화를 시작할 수 없습니다. 다시 시도하세요.');
     preparing = true;
     try {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -154,6 +180,56 @@ function installRecording(window) {
       job.file = file;
       return { id: job.id, path: job.outputPath };
     } finally { preparing = false; resumeClose(); }
+  });
+  ipcMain.handle('recording:auto-start', async (event, options) => {
+    trusted(event);
+    const job = active(options?.id);
+    if (!job.automatic || preparing || job.auto || job.finishing || job.capturePending || closeRequested) throw new Error('자동 녹화를 시작할 수 없습니다.');
+    preparing = true;
+    try {
+      const selected = await dialog.showOpenDialog(window, {
+        title: '자동 녹화 MP4 저장 폴더 선택', defaultPath: app.getPath('videos'),
+        properties: ['openDirectory', 'createDirectory']
+      });
+      if (selected.canceled || !selected.filePaths?.[0] || closeRequested || window.isDestroyed() || current !== job || job.finishing) {
+        if (current === job) await finish(job.id);
+        return { cancelled: true };
+      }
+      const folder = selected.filePaths[0];
+      if (!(await fs.stat(folder)).isDirectory()) throw new Error('자동 녹화 저장 폴더를 선택하세요.');
+      const automatic = await createAutoRecording({
+        folder,
+        onStatus(value) {
+          if (current !== job) return;
+          if (value.path) lastSaved = { path: value.path, bytes: value.bytes || 1 };
+          progress({ mode: 'auto', ...value });
+        },
+        onError: cause => automaticError(job, cause)
+      });
+      if (current !== job || job.finishing || closeRequested || window.isDestroyed()) {
+        await automatic.close();
+        if (current === job) await finish(job.id);
+        return { cancelled: true };
+      }
+      job.auto = automatic;
+      job.autoFolder = folder;
+      lastSaved = { path: folder, bytes: 1 };
+      onAutoStart();
+      return { id: job.id, folder, preSeconds: 5, postSeconds: 10 };
+    } finally { preparing = false; resumeClose(); }
+  });
+  ipcMain.handle('recording:auto-segment', async (event, id, buffer, timing) => {
+    trusted(event);
+    const job = active(id);
+    if (!job.automatic || !job.auto || job.finishing || job.error) throw new Error(job.error?.message || '자동 녹화가 준비되지 않았습니다.');
+    if (!(buffer instanceof ArrayBuffer) && !ArrayBuffer.isView(buffer)) throw new Error('잘못된 자동 녹화 데이터입니다.');
+    const bytes = buffer instanceof ArrayBuffer ? Buffer.from(buffer) : Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    if (!bytes.length || bytes.length > 8 * 1024 * 1024 || job.queuedBytes + bytes.length > 16 * 1024 * 1024) throw new Error('자동 녹화 저장 속도가 부족합니다.');
+    if (!timing || !Number.isFinite(timing.start) || !Number.isFinite(timing.end) || timing.end < timing.start || timing.end - timing.start > 15_000) throw new Error('잘못된 자동 녹화 시간입니다.');
+    job.queuedBytes += bytes.length;
+    try { await job.auto.segment(bytes, { start: timing.start, end: timing.end }); }
+    catch (cause) { automaticError(job, cause); throw cause; }
+    finally { job.queuedBytes -= bytes.length; }
   });
   ipcMain.handle('recording:chunk', async (event, id, chunk) => {
     trusted(event);
@@ -204,10 +280,11 @@ function installRecording(window) {
       return result;
     } finally { converting = false; resumeClose(); }
   });
-  ipcMain.handle('recording:reveal', event => {
+  ipcMain.handle('recording:reveal', async event => {
     trusted(event);
     if (!lastSaved?.bytes) throw new Error('저장된 녹화 파일이 없습니다.');
-    shell.showItemInFolder(lastSaved.path);
+    if ((await fs.stat(lastSaved.path)).isDirectory()) await shell.openPath(lastSaved.path);
+    else shell.showItemInFolder(lastSaved.path);
   });
   window.on('close', event => {
     if (allowClose || (!current && !preparing && !converting)) return;
@@ -215,9 +292,9 @@ function installRecording(window) {
     if (closeRequested) return;
     closeRequested = true;
     if (!contents.isDestroyed()) contents.send('recording:stop');
-    if (converting || current?.converting) return;
+    if (converting || current?.converting || (current?.automatic && current.finishing)) return;
     closeTimer = setTimeout(() => {
-      if (converting || current?.converting) return;
+      if (converting || current?.converting || (current?.automatic && current.finishing)) return;
       // A stalled renderer or storage device must not keep the app open forever.
       // Already written bytes remain on disk even if finalization cannot finish.
       closeTimer = setTimeout(() => {
@@ -236,6 +313,13 @@ function installRecording(window) {
     clearTimeout(closeTimer);
     if (current) finish(current.id, '프로그램 종료로 녹화를 마쳤습니다.').catch(() => {});
   });
+  return {
+    onPLC(data) {
+      const job = current;
+      if (!job?.automatic || !job.auto || job.finishing || job.error) return;
+      try { job.auto.onPLC(data); } catch (cause) { automaticError(job, cause); }
+    }
+  };
 }
 
 module.exports = { installRecording };

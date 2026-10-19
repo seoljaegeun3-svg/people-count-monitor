@@ -39,7 +39,7 @@
       <div class="plc-detail"><span id="plc-status" class="status">연결 대기</span><p id="plc-message">설정을 확인한 후 연결하세요.</p><small id="plc-updated">수신 기록 없음</small></div>
       <button class="primary" id="plc-connect">PLC 연결</button>
     </section>
-    <footer><span><i></i> 카메라와 PLC가 연결된 Windows PC에서 사용</span><span>PLC 읽기 전용 · 자동 쓰기 / 리셋 없음</span></footer>
+    <footer><div class="auto-recording-controls"><button id="record-auto" aria-pressed="false">자동 녹화 켜기</button><span id="record-auto-status" role="status" aria-live="polite">PLC 값 변화 전 5초 · 후 10초 저장</span></div><span>PLC 읽기 전용 · 자동 쓰기 / 리셋 없음</span></footer>
   </main>
   <dialog id="settings-dialog">
     <form id="settings-form">

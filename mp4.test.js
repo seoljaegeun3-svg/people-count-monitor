@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { promisify } = require('node:util');
 const { execFile } = require('node:child_process');
-const { convertToMP4 } = require('./mp4');
+const { convertToMP4, concatToMP4 } = require('./mp4');
 const ffmpeg = require('ffmpeg-static');
 const run = promisify(execFile);
 
@@ -81,4 +81,36 @@ test('failed conversion leaves the source intact and cleans its temporary output
   await assert.rejects(convertToMP4(source, destination), /MP4 변환에 실패/);
   assert.equal(await fs.readFile(source, 'utf8'), 'incomplete original recording');
   assert.deepEqual(await fs.readdir(directory), ['broken.webm']);
+});
+
+test('independent high-frame-rate WebM segments concatenate into a bounded-rate seekable MP4', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "people-count-구간 ' 테스트-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const sources = [];
+  for (const color of ['red', 'blue']) {
+    const source = path.join(directory, `${color}.webm`);
+    await run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `color=c=${color}:size=160x90:rate=1000`,
+      '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '0.5', '-c:v', 'libvpx', '-threads', '1',
+      '-c:a', 'libopus', '-live', '1', '-n', source], { windowsHide: true });
+    assert(!(await fs.readFile(source)).includes(Buffer.from([0x44, 0x89])), 'live input has no WebM Duration element');
+    sources.push({ path: source, duration: 0.5 });
+  }
+  const destination = path.join(directory, 'result.mp4');
+  await concatToMP4(sources, destination);
+  const output = await fs.readFile(destination);
+  assert(output.indexOf('moov') < output.indexOf('mdat'));
+  assert(output.includes(Buffer.from('stss')));
+  assert(output.includes(Buffer.from('avc1')) && output.includes(Buffer.from('mp4a')));
+  const samples = output.readUInt32BE(output.indexOf('stsz') + 12);
+  assert(samples >= 25 && samples <= 35, `one second of output stays near thirty frames instead of duplicating a thousand: ${samples}`);
+  const header = output.indexOf('mvhd');
+  const duration = output.readUInt32BE(header + 20) / output.readUInt32BE(header + 16);
+  assert(duration > 0.9 && duration < 1.5, `independent segment timeline is joined: ${duration}`);
+  for (const [time, channel] of [['0.1', 0], ['0.8', 2]]) {
+    const { stdout } = await run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-ss', time, '-i', destination,
+      '-frames:v', '1', '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'], { windowsHide: true, encoding: 'buffer' });
+    assert(stdout[channel] > 150 && stdout[(channel + 1) % 3] < 80, `seek at ${time} returns the expected segment color`);
+  }
+  assert(await fs.stat(sources[0].path));
+  assert(await fs.stat(sources[1].path));
 });

@@ -1,0 +1,234 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const vm = require('node:vm');
+
+async function fixture(t, convert, filesystem = fs) {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'people-count-auto-test-'));
+  t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  const conversions = [], statuses = [], errors = [];
+  const module = { exports: {} };
+  const source = fsSync.readFileSync(path.join(__dirname, 'auto-recording.js'), 'utf8');
+  const converter = async (parts, destination) => {
+    const contents = await Promise.all(parts.map(part => fs.readFile(part.path, 'utf8')));
+    conversions.push({ parts: parts.map(part => ({ ...part })), contents, destination });
+    if (convert) await convert(parts, destination, conversions.length);
+    else await fs.writeFile(destination, 'complete MP4');
+    return { path: destination, bytes: (await fs.stat(destination)).size };
+  };
+  vm.runInNewContext('(function(require,module){' + source + '\n})', { Buffer })(
+    name => name === './mp4' ? { concatToMP4: converter } : name === 'node:fs/promises' ? filesystem : require(name), module);
+  let time = 1_000_000;
+  const manager = await module.exports.createAutoRecording({ folder, now: () => time,
+    onStatus: status => statuses.push(status), onError: error => errors.push(error) });
+  const setTime = value => { time = 1_000_000 + value; };
+  const segment = async (start, end) => {
+    setTime(end);
+    return manager.segment(Buffer.from(`${start}-${end}`), { start: 1_000_000 + start, end: 1_000_000 + end });
+  };
+  const feed = async (start, end) => { for (let i = start; i < end; i += 2000) await segment(i, i + 2000); };
+  const plc = value => manager.onPLC({ state: 'ok', value });
+  return { folder, manager, conversions, statuses, errors, setTime, segment, feed, plc };
+}
+
+test('first reading and reconnect establish a baseline; increases and decreases extend one pre/post-roll clip', async t => {
+  const f = await fixture(t);
+  await f.feed(0, 10000);
+  f.plc(20); f.plc(20);
+  f.manager.onPLC({ state: 'connecting' });
+  f.plc(99);
+  f.manager.onPLC({ state: 'error', value: 0 });
+  f.plc(10);
+  assert.equal(f.statuses.filter(value => value.state === 'recording').length, 0);
+  f.plc(11);
+  await f.feed(10000, 14000);
+  f.plc(10);
+  await f.feed(14000, 24000);
+  const result = await f.manager.close();
+  assert.equal(result.saved, 1);
+  assert.equal(result.error, '');
+  assert.equal(f.conversions.length, 1);
+  assert.equal(f.conversions[0].contents[0], '4000-6000', 'pre-roll includes the segment crossing five seconds before the change');
+  assert.equal(f.conversions[0].contents.at(-1), '22000-24000', 'decrease extends the tail through ten seconds after the last change');
+  assert.equal(f.errors.length, 0);
+  assert(f.statuses.some(value => value.state === 'saved'));
+  assert.deepEqual((await fs.readdir(f.folder)).filter(name => !name.endsWith('.mp4')), []);
+});
+
+test('idle automatic recording keeps only a bounded rolling buffer and writes no MP4', async t => {
+  const f = await fixture(t);
+  f.plc(0);
+  for (let start = 0; start < 120000; start += 2000) {
+    await f.segment(start, start + 2000);
+    const [working] = await fs.readdir(f.folder);
+    assert((await fs.readdir(path.join(f.folder, working))).length <= 5);
+  }
+  const result = await f.manager.close();
+  assert.equal(result.saved, 0);
+  assert.equal(f.conversions.length, 0);
+  assert.deepEqual(await fs.readdir(f.folder), []);
+  assert.strictEqual(f.manager.close(), f.manager.close(), 'closing is idempotent');
+});
+
+test('continuous passages split at sixty seconds without missing or duplicating a segment', async t => {
+  const f = await fixture(t);
+  f.plc(0);
+  await f.feed(0, 6000);
+  f.plc(1);
+  for (let start = 6000; start < 130000; start += 2000) {
+    await f.segment(start, start + 2000);
+    f.plc(start % 4000 === 0 ? 1 : 0);
+  }
+  const result = await f.manager.close();
+  assert.equal(result.saved, 3);
+  const segments = f.conversions.flatMap(value => value.contents);
+  assert.deepEqual(segments, Array.from({ length: 65 }, (_, i) => `${i * 2000}-${(i + 1) * 2000}`));
+  assert(f.conversions.every(value => value.parts.reduce((sum, part) => sum + part.duration, 0) <= 60));
+});
+
+test('a slow background conversion keeps shared pre-roll safe while collecting another passage', async t => {
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, async (_parts, destination, index) => {
+    if (index === 1) await blocked;
+    await fs.writeFile(destination, 'complete MP4');
+  });
+  f.plc(0);
+  await f.feed(0, 6000);
+  f.plc(1);
+  await f.feed(6000, 16000);
+  for (let i = 0; !f.conversions.length && i < 10; i++) await new Promise(setImmediate);
+  assert.equal(f.conversions.length, 1);
+  f.setTime(17000); f.plc(0);
+  await f.feed(16000, 28000);
+  for (const part of f.conversions[0].parts) assert((await fs.stat(part.path)).size > 0, 'encoder-owned originals remain available');
+  release();
+  const result = await f.manager.close();
+  assert.equal(result.saved, 2);
+  assert.equal(f.conversions.length, 2);
+  assert.equal(f.conversions[1].contents[0], '12000-14000');
+  assert.equal(f.conversions[1].contents.at(-1), '26000-28000');
+});
+
+test('encoder failure stops automatic mode and preserves independently playable original segments for each pending clip', async t => {
+  const f = await fixture(t, async () => { throw new Error('encoder unavailable'); });
+  f.plc(0);
+  await f.feed(0, 6000);
+  f.plc(1);
+  await f.feed(6000, 16000);
+  const result = await f.manager.close();
+  assert.equal(result.saved, 0);
+  assert.match(result.error, /encoder unavailable/);
+  assert.equal(f.errors.length, 1);
+  assert.match(path.basename(result.path), /^People-Count-Recovery-/);
+  const recovery = await fs.readdir(result.path);
+  assert(recovery.includes('segments.ffconcat'));
+  assert(recovery.some(name => name.endsWith('.webm')));
+  assert.equal(await fs.readFile(path.join(result.path, 'segment-0001.webm'), 'utf8'), '0-2000');
+  assert.deepEqual((await fs.readdir(f.folder)).filter(name => name.startsWith('.people-count-auto-')), []);
+});
+
+test('queue overload requests a stop and keeps every collected passage rather than dropping it', async t => {
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, async (_parts, destination, index) => {
+    if (index === 1) await blocked;
+    await fs.writeFile(destination, 'complete MP4');
+  });
+  f.plc(0);
+  for (let event = 0; event < 5; event++) {
+    const start = event * 14000;
+    f.setTime(start);
+    f.plc((event + 1) % 2);
+    await f.feed(start, start + 14000);
+  }
+  assert.equal(f.errors.length, 1);
+  assert.match(f.errors[0].message, /속도를 따라가지 못해/);
+  release();
+  const result = await f.manager.close();
+  assert.equal(result.saved, 5, 'all queued events survive overload');
+  assert.equal(f.conversions.length, 5);
+});
+
+test('disk failure preserves the existing rolling originals and reports the storage error', async t => {
+  const f = await fixture(t);
+  await f.feed(0, 6000);
+  f.plc(0); f.plc(1);
+  const [directory] = await fs.readdir(f.folder);
+  await fs.mkdir(path.join(f.folder, directory, 'segment-00000004.webm'));
+  await assert.rejects(f.segment(6000, 8000), /EEXIST/);
+  const result = await f.manager.close();
+  assert.equal(f.errors.length, 1);
+  assert.match(result.error, /원본을 저장하지 못했습니다/);
+  assert((await fs.readdir(path.join(f.folder, directory))).includes('segment-00000001.webm'));
+});
+
+test('a PLC trigger cannot acquire a source whose deletion is already awaiting the disk', async t => {
+  let releaseDelete, deletionStarted;
+  const blocked = new Promise(resolve => { releaseDelete = resolve; });
+  const started = new Promise(resolve => { deletionStarted = resolve; });
+  let delayed = false, deletingPath;
+  const filesystem = { ...fs, async unlink(filename) {
+    if (!delayed && filename.endsWith('.webm')) {
+      delayed = true;
+      deletingPath = filename;
+      deletionStarted();
+      await blocked;
+    }
+    return fs.unlink(filename);
+  } };
+  const f = await fixture(t, undefined, filesystem);
+  f.plc(0);
+  await f.feed(0, 8000);
+  const pendingSegment = f.segment(8000, 10000);
+  await started;
+  // Also exercise a clock adjustment during the pending deletion. Old code
+  // left the part in the rolling array and let this callback reference it.
+  f.setTime(6000); f.plc(1);
+  releaseDelete();
+  await pendingSegment;
+  const result = await f.manager.close();
+  assert.equal(result.error, '');
+  assert.equal(result.saved, 1);
+  assert(!f.conversions[0].parts.some(part => part.path === deletingPath));
+});
+
+test('encoder cleanup and incoming-segment cleanup do not remove each other\'s source records', async t => {
+  let releaseEncoder, releaseDelete, deletionStarted;
+  const encoderBlocked = new Promise(resolve => { releaseEncoder = resolve; });
+  const deletionBlocked = new Promise(resolve => { releaseDelete = resolve; });
+  const started = new Promise(resolve => { deletionStarted = resolve; });
+  let enableGate = false, delayed = false;
+  const filesystem = { ...fs, async unlink(filename) {
+    if (enableGate && !delayed && filename.endsWith('.webm')) {
+      delayed = true;
+      deletionStarted();
+      await deletionBlocked;
+    }
+    return fs.unlink(filename);
+  } };
+  const f = await fixture(t, async (_parts, destination, index) => {
+    if (index === 1) await encoderBlocked;
+    await fs.writeFile(destination, 'complete MP4');
+  }, filesystem);
+  f.plc(0);
+  await f.feed(0, 6000);
+  f.plc(1);
+  await f.feed(6000, 24000);
+  enableGate = true;
+  releaseEncoder();
+  await started;
+  await f.segment(24000, 26000);
+  f.plc(0);
+  releaseDelete();
+  await f.feed(26000, 36000);
+  const result = await f.manager.close();
+  assert.equal(result.error, '');
+  assert.equal(result.saved, 2);
+  assert.deepEqual(f.conversions[1].contents, ['20000-22000', '22000-24000', '24000-26000',
+    '26000-28000', '28000-30000', '30000-32000', '32000-34000', '34000-36000']);
+  assert.deepEqual((await fs.readdir(f.folder)).filter(name => !name.endsWith('.mp4')), []);
+});

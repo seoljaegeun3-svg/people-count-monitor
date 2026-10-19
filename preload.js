@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('monitor', {
   onPage: callback => ipcRenderer.on('page', (_event, data) => callback(data)),
   recordingPrepare: options => ipcRenderer.invoke('recording:prepare', options),
   recordingStart: options => ipcRenderer.invoke('recording:start', options),
+  recordingAutoStart: options => ipcRenderer.invoke('recording:auto-start', options),
+  recordingAutoSegment: (id, buffer, timing) => ipcRenderer.invoke('recording:auto-segment', id, buffer, timing),
   recordingChunk: (id, chunk) => ipcRenderer.invoke('recording:chunk', id, chunk),
   recordingFinish: (id, error) => ipcRenderer.invoke('recording:finish', id, error),
   recordingCancel: id => ipcRenderer.invoke('recording:cancel', id),

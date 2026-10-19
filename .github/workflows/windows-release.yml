@@ -42,7 +42,7 @@ jobs:
           $tag = "v$version"
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --draft --target $env:GITHUB_SHA --title "People Count Monitor $version" --notes "녹화 파일을 시간 이동이 가능한 MP4(H.264/AAC)로 저장합니다. 중지 후 MP4 저장 완료를 기다리세요. 기존 WebM 파일은 상단 MP4 변환 버튼으로 바꿀 수 있으며 원본은 유지합니다. Windows에서 실제 화면 녹화·MP4 앞뒤 탐색과 배포본 내장 변환기를 검증한 빌드입니다. 아래 Assets에서 EXE를 다운로드하세요."
+            gh release create $tag --draft --target $env:GITHUB_SHA --title "People Count Monitor $version" --notes "PLC 값 변화에 따른 통행 자동 녹화 ON/OFF를 추가했습니다. 아래 왼쪽 자동 녹화 켜기를 누르고 저장 폴더를 선택하세요. 변화 전 5초부터 마지막 변화 후 10초까지 MP4로 저장하며, 연속 통행은 연장하고 60초 단위로 나눕니다. 대기용 임시 영상은 돌려 쓰고 정상 OFF 시 정리합니다. Windows에서 실제 PLC 모의 신호·자동 저장·MP4 시간 탐색·OFF 뒤 수동 녹화 및 배포본 내장 변환기를 검증한 빌드입니다. 아래 Assets에서 EXE를 다운로드하세요."
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           gh release upload $tag "dist/People-Count-Monitor-$version.exe" --clobber

@@ -1,6 +1,6 @@
 {
   "name": "people-count-monitor",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": true,
   "description": "카메라·웹 탭·PLC 통합 모니터와 프로그램 창 녹화",
   "main": "main.js",
@@ -24,6 +24,7 @@
       "plc.js",
       "web-url.js",
       "recording.js",
+      "auto-recording.js",
       "mp4.js",
       "ui/**",
       "THIRD_PARTY_NOTICES.md",

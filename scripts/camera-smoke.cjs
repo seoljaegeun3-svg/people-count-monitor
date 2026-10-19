@@ -1,16 +1,50 @@
 // Real Chromium authentication, tabs, and layout against local fixtures only.
 const { app, BrowserWindow, session, dialog } = require('electron');
 const http = require('node:http');
+const net = require('node:net');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 const assert = require('node:assert/strict');
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'people-count-auth-'));
 app.setPath('userData', profile);
 const recordingPath = path.join(profile, 'fixture-recording.mp4');
 dialog.showSaveDialog = async () => ({ canceled: false, filePath: recordingPath });
+const automaticFolder = path.join(profile, 'automatic-clips');
+fs.mkdirSync(automaticFolder);
+dialog.showOpenDialog = async (_window, options) => {
+  assert(options.properties.includes('openDirectory'), 'automatic recording asks for a folder');
+  return { canceled: false, filePaths: [automaticFolder] };
+};
+let plcValue = 41;
+const plcReads = [];
+const plcSockets = new Set();
+const plcServer = net.createServer(socket => {
+  plcSockets.add(socket);
+  socket.on('close', () => plcSockets.delete(socket));
+  socket.on('error', () => {});
+  let request = Buffer.alloc(0);
+  socket.on('data', chunk => {
+    request = Buffer.concat([request, chunk]);
+    if (request.length < 20 || request.length < 20 + request.readUInt16LE(16)) return;
+    assert.equal(request.length, 34, 'automatic recording must use the existing read-only XGT packet');
+    assert.deepEqual([...request.subarray(20)], [0x54, 0, 2, 0, 0, 0, 1, 0, 4, 0, 37, 77, 87, 48]);
+    const response = Buffer.alloc(34);
+    request.copy(response, 0, 0, 20);
+    response[13] = 0x11;
+    response.writeUInt16LE(14, 16);
+    response.writeUInt16LE(0x55, 20);
+    response.writeUInt16LE(2, 22);
+    response.writeUInt16LE(1, 28);
+    response.writeUInt16LE(2, 30);
+    response.writeUInt16LE(plcValue, 32);
+    plcReads.push({ value: plcValue, at: Date.now() });
+    socket.end(response);
+  });
+});
 const username = 'fixture-user', password = 'fixture-password';
 const md5 = value => crypto.createHash('md5').update(value).digest('hex');
 const nonce = 'local-fixture-nonce', realm = 'Camera Digest';
@@ -41,11 +75,11 @@ async function until(check, message, timeoutMs = 12000) {
   }
   throw new Error(`Timed out: ${message}${lastError ? ` (${lastError.message})` : ''}`);
 }
-const timeout = setTimeout(() => { console.error('Camera and browser smoke test timed out'); app.exit(1); }, 90000);
+const timeout = setTimeout(() => { console.error('Camera and browser smoke test timed out'); app.exit(1); }, 120000);
 (async () => {
-  await Promise.all([app.whenReady(), listen(server), listen(foreign)]);
+  await Promise.all([app.whenReady(), listen(server), listen(foreign), listen(plcServer)]);
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const config = { camera: `${origin}/basic`, youtube: 'https://www.youtube.com/', plc: { host: '127.0.0.1', port: 2004, word: '%MW0', interval: 500 } };
+  const config = { camera: `${origin}/basic`, youtube: 'https://www.youtube.com/', plc: { host: '127.0.0.1', port: plcServer.address().port, word: '%MW0', interval: 500 } };
   fs.writeFileSync(path.join(profile, 'settings.json'), JSON.stringify(config));
   const browserSession = session.fromPartition('persist:youtube');
   const webRequests = [];
@@ -59,6 +93,13 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
   await until(() => BrowserWindow.getAllWindows().length > 0, 'main window');
   const win = BrowserWindow.getAllWindows()[0];
   const ui = script => win.webContents.executeJavaScript(script);
+  const clickWithGesture = async selector => {
+    const point = await ui(`(() => { const b = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)}; })()`);
+    win.focus();
+    win.webContents.focus();
+    win.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 });
+    win.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 });
+  };
   const dialogOpen = () => ui("document.getElementById('camera-auth-dialog')?.open === true");
   await until(dialogOpen, 'Basic auth dialog');
   assert(win.contentView.children.every(v => !v.getVisible()), 'web panels must not cover the login dialog');
@@ -262,11 +303,8 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
     }, 'native camera and browser fixture color is painted');
   };
   await paintRecordedPages('rgb(232,64,64)', false);
-  const recordButton = await ui("document.getElementById('record-audio').checked = false; (() => { const b = document.getElementById('record-start').getBoundingClientRect(); return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)}; })()");
-  win.focus();
-  win.webContents.focus();
-  win.webContents.sendInputEvent({ type: 'mouseDown', ...recordButton, button: 'left', clickCount: 1 });
-  win.webContents.sendInputEvent({ type: 'mouseUp', ...recordButton, button: 'left', clickCount: 1 });
+  await ui("document.getElementById('record-audio').checked = false; true;");
+  await clickWithGesture('#record-start');
   await until(() => ui("document.getElementById('record-status').dataset.state === 'recording'"), 'own-window recording starts').catch(async error => {
     throw new Error(`${error.message}: ${await ui("document.getElementById('record-status').textContent")}`);
   });
@@ -276,21 +314,23 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
   await ui("document.getElementById('record-stop').click(); true;");
   await until(() => ui("document.getElementById('record-status').dataset.state === 'idle' && document.getElementById('record-status').textContent.includes('저장 완료')"), 'MP4 recording finalizes', 30000);
   assert(fs.existsSync(recordingPath) && fs.statSync(recordingPath).size > 1024, 'recorded MP4 is written');
-  const recording = fs.readFileSync(recordingPath);
-  assert.equal(recording.subarray(4, 8).toString('ascii'), 'ftyp', 'recording is an MP4 container');
-  assert(recording.includes(Buffer.from('avc1')), 'MP4 contains an H.264 video track');
-  const metadataAt = recording.indexOf(Buffer.from('moov')), mediaAt = recording.indexOf(Buffer.from('mdat'));
-  assert(metadataAt > 0 && mediaAt > metadataAt, 'MP4 metadata precedes media for fast seeking');
   assert.equal(await ui("document.getElementById('record-stop').disabled"), true);
-  const playbackPath = path.join(profile, 'recording-playback.html');
-  fs.writeFileSync(playbackPath, '<!doctype html><video src="fixture-recording.mp4" muted preload="auto"></video>');
-  const playback = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false } });
-  try {
+  const verifyMP4 = async (filePath, { minimumDuration = 1, maximumDuration = Infinity, firstFraction = .25, lastFraction = .75, label = 'own-window recording' } = {}) => {
+    const recording = fs.readFileSync(filePath);
+    assert.equal(recording.subarray(4, 8).toString('ascii'), 'ftyp', 'recording is an MP4 container');
+    assert(recording.includes(Buffer.from('avc1')), 'MP4 contains an H.264 video track');
+    const metadataAt = recording.indexOf(Buffer.from('moov')), mediaAt = recording.indexOf(Buffer.from('mdat'));
+    assert(metadataAt > 0 && mediaAt > metadataAt, 'MP4 metadata precedes media for fast seeking');
+    const playbackPath = path.join(profile, 'recording-playback.html');
+    fs.writeFileSync(playbackPath, `<!doctype html><video src="${pathToFileURL(filePath).href}" muted preload="auto"></video>`);
+    const playback = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false } });
+    try {
     await playback.loadFile(playbackPath);
     await until(() => playback.webContents.executeJavaScript("document.querySelector('video').readyState >= 2 && document.querySelector('video').videoWidth > 0"), 'saved recording decodes in Chromium');
     const dimensions = await playback.webContents.executeJavaScript("({width:document.querySelector('video').videoWidth,height:document.querySelector('video').videoHeight,duration:document.querySelector('video').duration})");
     assert(dimensions.width > 0 && dimensions.height > 0);
-    assert(Number.isFinite(dimensions.duration) && dimensions.duration > 1, 'MP4 has a finite duration for timeline seeking');
+    assert(Number.isFinite(dimensions.duration) && dimensions.duration > minimumDuration && dimensions.duration < maximumDuration,
+      `MP4 has a finite duration within the expected clip interval (${dimensions.duration}s)`);
     const seekFrame = fraction => playback.webContents.executeJavaScript(`new Promise((resolve, reject) => {
         const video = document.querySelector('video');
         const target = video.duration * ${fraction};
@@ -311,8 +351,8 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
         };
         video.currentTime = target;
       })`);
-    const later = await seekFrame(.75);
-    const earlier = await seekFrame(.25);
+    const later = await seekFrame(lastFraction);
+    const earlier = await seekFrame(firstFraction);
     for (const [label, frame] of [['forward', later], ['backward', earlier]]) {
       assert(Math.abs(frame.time-frame.target) < .15 && frame.ready >= 2, `${label} timeline seek resolves to a decoded frame`);
       for (const panel of ['camera', 'browser']) {
@@ -321,10 +361,65 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
           `${label} seek must show the corresponding ${panel} native view frame, RGB=${frame[panel]}`);
       }
     }
-    console.log(`PASS: own-window recording saved as H.264 fast-start MP4 with finite duration and working forward/backward seeks to camera/browser frames (${recording.length} bytes, ${dimensions.width}×${dimensions.height}, ${dimensions.duration.toFixed(2)}s)`);
-  } finally { playback.destroy(); }
+    console.log(`PASS: ${label} saved as H.264 fast-start MP4 with finite duration and working forward/backward seeks to camera/browser frames (${recording.length} bytes, ${dimensions.width}×${dimensions.height}, ${dimensions.duration.toFixed(2)}s)`);
+    return dimensions;
+    } finally { playback.destroy(); }
+  };
+  await verifyMP4(recordingPath);
+
+  // A real local XGT peer exercises the production PLC poller and count-change
+  // hook. Keep the normal five-second pre-roll and ten-second post-roll here.
+  await paintRecordedPages('rgb(232,64,64)', false);
+  await ui("window.fixtureAutoProgress = []; window.monitor.onRecordingProgress(progress => window.fixtureAutoProgress.push(progress)); true;");
+  await clickWithGesture('#record-auto');
+  await until(() => ui("document.getElementById('record-auto').getAttribute('aria-pressed') === 'true'"), 'automatic recording is armed').catch(async error => {
+    throw new Error(`${error.message}: ${await ui("document.getElementById('record-status').textContent")}`);
+  });
+  await until(() => ui("document.getElementById('plc-value').textContent === '41'"), 'automatic recording connects the read-only PLC');
+  await new Promise(resolve => setTimeout(resolve, 7000));
+  assert(plcReads.length >= 5, 'automatic recording receives live PLC baseline samples');
+  const mp4Files = () => fs.readdirSync(automaticFolder).filter(name => name.endsWith('.mp4'));
+  assert.equal(mp4Files().length, 0, 'first PLC sample and unchanged values must not create clips');
+  assert.equal(await ui("document.getElementById('record-start').disabled"), true, 'manual recording cannot compete with the rolling capture');
+  const firstEventAt = Date.now();
+  plcValue = 42;
+  await until(() => ui("document.getElementById('plc-value').textContent === '42'"), 'entry count change reaches the UI');
+  await paintRecordedPages('rgb(64,96,232)', true);
+  await new Promise(resolve => setTimeout(resolve, 4300));
+  plcValue = 41;
+  await until(() => ui("document.getElementById('plc-value').textContent === '41'"), 'exit count change reaches the UI');
+  const lastEventAt = Date.now();
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, firstEventAt + 11200 - Date.now())));
+  assert.equal(mp4Files().length, 0, 'exit extends the active clip beyond the first event post-roll');
+  await until(() => mp4Files().length === 1, 'entry and exit produce one merged event MP4', 18000);
+  await until(() => ui("window.fixtureAutoProgress.some(progress => progress.saved >= 1)"), 'automatic clip finalization reported', 15000);
+  assert(Date.now() - lastEventAt >= 9500, 'the merged clip includes the post-roll after the last change');
+  assert.equal(await ui("document.getElementById('record-auto').getAttribute('aria-pressed')"), 'true', 'saving a clip leaves automatic recording armed');
+  await verifyMP4(path.join(automaticFolder, mp4Files()[0]), { minimumDuration: 15, maximumDuration: 30, firstFraction: .1, label: 'PLC entry/exit merged automatic clip with pre-roll and post-roll' });
+  console.log('PASS: initial PLC baseline ignored, unchanged values omitted, increment/decrement trigger and extend one event clip');
+
+  // Turning OFF must flush and release capture so ordinary manual recording can
+  // start immediately, without retaining continuous video files in the folder.
+  await ui("document.getElementById('record-auto').click(); true;");
+  await until(() => ui("document.getElementById('record-status').dataset.state === 'idle' && document.getElementById('record-auto').getAttribute('aria-pressed') === 'false'"), 'automatic recording OFF releases capture', 15000);
+  assert.equal(mp4Files().length, 1, 'disabling an idle rolling buffer does not create another clip');
+  const savedClipCount = mp4Files().length;
+  plcValue = 42;
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  assert.equal(mp4Files().length, savedClipCount, 'PLC changes while OFF do not make clips');
+  const recoveryPath = path.join(profile, 'manual-after-automatic.mp4');
+  dialog.showSaveDialog = async () => ({ canceled: false, filePath: recoveryPath });
+  await clickWithGesture('#record-start');
+  await until(() => ui("document.getElementById('record-status').dataset.state === 'recording'"), 'manual recording starts after automatic OFF');
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  await ui("document.getElementById('record-stop').click(); true;");
+  await until(() => ui("document.getElementById('record-status').dataset.state === 'idle' && document.getElementById('record-status').textContent.includes('저장 완료')"), 'manual recording after auto finalizes', 30000);
+  assert(fs.existsSync(recoveryPath) && fs.statSync(recoveryPath).size > 1024, 'manual capture still writes a new MP4 after auto is disabled');
+  assert.equal(fs.readFileSync(recoveryPath).subarray(4, 8).toString('ascii'), 'ftyp');
+  assert.equal(fs.readdirSync(automaticFolder).filter(name => !name.endsWith('.mp4')).length, 0, 'temporary rolling segments are removed when automatic recording is OFF');
+  console.log('PASS: automatic OFF removes the rolling buffer, ignores subsequent PLC changes, and allows a fresh manual MP4 recording');
 })().then(() => {
-  clearTimeout(timeout); server.closeAllConnections(); foreign.closeAllConnections(); server.close(); foreign.close(); app.exit(0);
+  clearTimeout(timeout); server.closeAllConnections(); foreign.closeAllConnections(); server.close(); foreign.close(); for (const socket of plcSockets) socket.destroy(); plcServer.close(); app.exit(0);
 }, error => {
-  console.error(error.message); clearTimeout(timeout); server.closeAllConnections(); foreign.closeAllConnections(); server.close(); foreign.close(); app.exit(1);
+  console.error(error.message); clearTimeout(timeout); server.closeAllConnections(); foreign.closeAllConnections(); server.close(); foreign.close(); for (const socket of plcSockets) socket.destroy(); plcServer.close(); app.exit(1);
 });

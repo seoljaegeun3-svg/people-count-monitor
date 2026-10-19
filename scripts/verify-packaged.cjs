@@ -22,8 +22,9 @@ async function verify(resources) {
   }
   assert.ok((await fs.readFile(`${logicalBinary}.README`, 'utf8')).trim(), 'Include the binary build/source README.');
 
-  const { convertToMP4 } = require(path.join(appRoot, 'mp4.js'));
+  const { convertToMP4, concatToMP4 } = require(path.join(appRoot, 'mp4.js'));
   assert.equal(typeof convertToMP4, 'function', 'Package the real MP4 conversion helper.');
+  assert.equal(typeof require(path.join(appRoot, 'auto-recording.js')).createAutoRecording, 'function', 'Package the automatic recording controller.');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'people-count-packaged-mp4-'));
   try {
     const source = path.join(directory, 'odd-size-with-audio.webm');
@@ -68,6 +69,13 @@ async function verify(resources) {
       '-map', '0:v:0', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'
     ], { windowsHide: true, timeout: 60_000, maxBuffer: 1024 * 1024 });
     assert.equal(seekedFrame.length, 322 * 242 * 3, 'Decode a frame after seeking into the MP4.');
+    const joined = path.join(directory, 'automatic.mp4');
+    await concatToMP4([{ path: source, duration: 1 }, { path: source, duration: 1 }], joined);
+    const joinedFrame = execFileSync(binary, [
+      '-hide_banner', '-loglevel', 'error', '-nostdin', '-ss', '1.5', '-i', joined,
+      '-map', '0:v:0', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'
+    ], { windowsHide: true, timeout: 60_000, maxBuffer: 1024 * 1024 });
+    assert.equal(joinedFrame.length, 322 * 242 * 3, 'Seek across independently captured automatic recording segments.');
     assert.ok((await fs.stat(source)).size > 0, 'Keep the source recording available.');
     console.log(`Packaged MP4 check passed: ${version.split(/\r?\n/)[0]}; H.264/AAC, 322x242, ${seconds}s, indexed seeking.`);
   } finally {

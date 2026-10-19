@@ -7,7 +7,7 @@ const { resolveWebInput, safeWebURL } = require('./web-url');
 const { installRecording } = require('./recording');
 
 app.setName('People Count Monitor');
-let window, panels, settings, settingsPath;
+let window, panels, settings, settingsPath, recordingController;
 const browserTabs = [];
 let activeTabId = null, lastBounds = {};
 let enabled = false, generation = 0;
@@ -28,6 +28,7 @@ function safeURL(panel, input) {
   return url.href;
 }
 function emit(channel, data) {
+  if (channel === 'plc') recordingController?.onPLC(data);
   if (window && !window.isDestroyed()) window.webContents.send(channel, data);
 }
 function tabsSnapshot() {
@@ -99,7 +100,7 @@ app.whenReady().then(async () => {
   const workArea = screen.getPrimaryDisplay().workAreaSize;
   window = new BrowserWindow({ width: Math.min(1600, workArea.width), height: Math.min(1000, workArea.height), minWidth: 860, minHeight: 500, resizable: true, backgroundColor: '#0b1120', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-  installRecording(window);
+  recordingController = installRecording(window, { onAutoStart: () => setConnection(true) });
   panels = {};
   const createPanel = (name, tabId = null) => {
     const view = new WebContentsView({ webPreferences: { partition: `persist:${name}`, nodeIntegration: false, contextIsolation: true, sandbox: true } });
