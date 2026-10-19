@@ -4,11 +4,20 @@ contextBridge.exposeInMainWorld('monitor', {
   save: settings => ipcRenderer.invoke('save', settings),
   navigate: (panel, url) => ipcRenderer.invoke('navigate', panel, url),
   action: (panel, action) => ipcRenderer.invoke('action', panel, action),
+  tabs: (action, id) => ipcRenderer.invoke('browser-tabs', action, id),
+  onTabs: callback => ipcRenderer.on('tabs', (_event, data) => callback(data)),
   connect: enabled => ipcRenderer.invoke('connect', enabled),
   authenticate: input => ipcRenderer.invoke('camera-auth', input),
   onAuth: callback => ipcRenderer.on('camera-auth', (_event, data) => callback(data)),
   onAuthClosed: callback => ipcRenderer.on('camera-auth-closed', (_event, data) => callback(data)),
   layout: bounds => ipcRenderer.send('layout', bounds),
   onPLC: callback => ipcRenderer.on('plc', (_event, data) => callback(data)),
-  onPage: callback => ipcRenderer.on('page', (_event, data) => callback(data))
+  onPage: callback => ipcRenderer.on('page', (_event, data) => callback(data)),
+  recordingPrepare: options => ipcRenderer.invoke('recording:prepare', options),
+  recordingStart: options => ipcRenderer.invoke('recording:start', options),
+  recordingChunk: (id, chunk) => ipcRenderer.invoke('recording:chunk', id, chunk),
+  recordingFinish: (id, error) => ipcRenderer.invoke('recording:finish', id, error),
+  recordingCancel: id => ipcRenderer.invoke('recording:cancel', id),
+  recordingReveal: () => ipcRenderer.invoke('recording:reveal'),
+  onRecordingStop: callback => ipcRenderer.on('recording:stop', () => callback())
 });

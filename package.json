@@ -1,8 +1,8 @@
 {
   "name": "people-count-monitor",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "private": true,
-  "description": "카메라·YouTube·웹 검색·LS PLC 피플카운팅 통합 모니터",
+  "description": "카메라·웹 탭·PLC 통합 모니터와 프로그램 창 녹화",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -17,7 +17,7 @@
   "build": {
     "appId": "kr.peoplecount.monitor",
     "productName": "People Count Monitor",
-    "files": ["main.js", "preload.js", "plc.js", "web-url.js", "ui/**", "package.json"],
+    "files": ["main.js", "preload.js", "plc.js", "web-url.js", "recording.js", "ui/**", "package.json"],
     "win": { "target": "portable" },
     "artifactName": "People-Count-Monitor-${version}.${ext}"
   }

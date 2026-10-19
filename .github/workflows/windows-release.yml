@@ -31,7 +31,7 @@ jobs:
           $tag = "v$version"
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --draft --target $env:GITHUB_SHA --title "People Count Monitor $version" --notes "오른쪽 화면에 구글 검색·일반 웹사이트 탐색·Google/YouTube 바로가기 추가. Windows에서 카메라 인증과 브라우저 테스트를 통과한 빌드입니다. 아래 Assets에서 EXE를 다운로드하세요."
+            gh release create $tag --draft --target $env:GITHUB_SHA --title "People Count Monitor $version" --notes "프로그램 창 전체 WebM 녹화, 선택형 PC 소리 녹음, 웹 탭 추가·삭제, 웹 창 닫기·재추가, 좌우·위아래 비율과 창 높이 조절 지원. Windows에서 카메라·웹 탭·배치 및 실제 녹화 파일 재생 테스트를 통과한 빌드입니다. 아래 Assets에서 EXE를 다운로드하세요."
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           gh release upload $tag "dist/People-Count-Monitor-$version.exe" --clobber

@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
 let settings, connected = false, toastTimer;
+let activeBrowserTab = null;
 const dialog = $('settings-dialog');
 const authDialog = $('camera-auth-dialog');
 let authRequest;
@@ -12,6 +13,7 @@ function toast(message) {
 function layout() {
   const bounds = {};
   if (!dialog.open && !authDialog.open) for (const name of ['camera', 'youtube']) {
+    if (name === 'youtube' && !activeBrowserTab) continue;
     const b = $(`${name}-space`).getBoundingClientRect();
     bounds[name] = { x: b.x + 1, y: b.y + 1, width: b.width - 2, height: b.height - 2 };
   }
@@ -26,6 +28,49 @@ function updateSettings() {
 function navigate(name) {
   window.monitor.navigate(name, $(`${name}-url`).value).catch(error => toast(error.message));
 }
+function showPage(data) {
+  if (data.url) $(`${data.panel}-url`).value = data.url;
+  if (!data.state) return;
+  const label = $(`${data.panel}-status`);
+  label.className = `status ${data.state === 'ready' ? 'ok' : ['error', 'unauthorized'].includes(data.state) ? 'error' : ''}`;
+  label.textContent = data.state === 'ready' ? '페이지 열림' : data.state === 'loading' ? '불러오는 중…' : data.state === 'unauthorized' ? '로그인 필요' : '페이지 연결 실패';
+  label.title = data.message || '페이지 로드 상태입니다. 영상 재생 여부는 화면에서 확인하세요.';
+}
+function renderTabs(snapshot) {
+  const changed = activeBrowserTab !== snapshot.activeId;
+  activeBrowserTab = snapshot.activeId;
+  const active = snapshot.tabs.find(tab => tab.id === activeBrowserTab);
+  try { localStorage.setItem('monitor-browser-hidden', String(!active)); } catch { /* The view still closes without storage. */ }
+  document.querySelector('.youtube-panel').hidden = !active;
+  document.querySelector('.divider').hidden = !active;
+  document.querySelector('.workspace').classList.toggle('one-panel', !active);
+  $('browser-tabs').replaceChildren(...snapshot.tabs.map(tab => {
+    const item = document.createElement('div');
+    item.className = `browser-tab${tab.id === activeBrowserTab ? ' active' : ''}`;
+    const select = document.createElement('button');
+    select.className = 'tab-select'; select.dataset.tabId = tab.id;
+    select.setAttribute('role', 'tab'); select.setAttribute('aria-selected', String(tab.id === activeBrowserTab));
+    select.textContent = tab.title || '새 탭'; select.title = tab.url;
+    const close = document.createElement('button');
+    close.className = 'tab-close'; close.dataset.closeTab = tab.id; close.textContent = '×';
+    close.setAttribute('aria-label', `${tab.title || '웹 탭'} 닫기`);
+    item.append(select, close); return item;
+  }));
+  if (active) showPage({ panel: 'youtube', state: active.state, message: active.message, url: changed ? active.url : undefined });
+  layout();
+}
+async function tabAction(action, id) {
+  try { renderTabs(await window.monitor.tabs(action, id)); } catch (error) { toast(error.message); }
+}
+window.monitor.onTabs(renderTabs);
+$('add-browser').addEventListener('click', () => tabAction('add'));
+$('add-tab').addEventListener('click', () => tabAction('add'));
+$('browser-tabs').addEventListener('click', event => {
+  const close = event.target.closest('[data-close-tab]');
+  const tab = event.target.closest('[data-tab-id]');
+  if (close) tabAction('close', close.dataset.closeTab);
+  else if (tab) tabAction('activate', tab.dataset.tabId);
+});
 for (const name of ['camera', 'youtube']) $(`${name}-form`).addEventListener('submit', event => { event.preventDefault(); navigate(name); });
 document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => {
   window.monitor.action(button.dataset.panel, button.dataset.action).catch(error => toast(error.message));
@@ -81,7 +126,7 @@ $('settings-form').addEventListener('submit', async event => {
     settings = await window.monitor.save(next);
     connected = false; $('plc-connect').textContent = 'PLC 연결';
     updateSettings(); closeSettings();
-    navigate('camera'); navigate('youtube');
+    navigate('camera'); if (activeBrowserTab) navigate('youtube');
     toast('설정을 저장했습니다. PLC 연결 버튼으로 읽기를 시작하세요.');
   } catch (error) { $('settings-error').textContent = error.message; }
 });
@@ -101,21 +146,27 @@ window.monitor.onPLC(data => {
   $('plc-updated').textContent = ok ? `최근 수신 ${new Date(data.time).toLocaleTimeString('ko-KR')}` : '현재 유효한 값 없음';
 });
 window.monitor.onPage(data => {
-  if (data.url) $(`${data.panel}-url`).value = data.url;
-  if (!data.state) return;
-  const label = $(`${data.panel}-status`);
-  label.className = `status ${data.state === 'ready' ? 'ok' : ['error', 'unauthorized'].includes(data.state) ? 'error' : ''}`;
-  label.textContent = data.state === 'ready' ? '페이지 열림' : data.state === 'loading' ? '불러오는 중…' : data.state === 'unauthorized' ? '로그인 필요' : '페이지 연결 실패';
-  label.title = data.message || '페이지 로드 상태입니다. 영상 재생 여부는 화면에서 확인하세요.';
+  if (data.panel === 'youtube' && data.tabId && data.tabId !== activeBrowserTab) return;
+  showPage(data);
   if (data.state === 'error') toast(`${data.panel === 'camera' ? '카메라' : '브라우저'}: ${data.message}`);
 });
 new ResizeObserver(layout).observe(document.querySelector('.workspace'));
-window.addEventListener('resize', layout);
 const divider = document.querySelector('.divider');
-let split = 60;
+const rowDivider = document.querySelector('.row-divider');
+let split = 60, plcHeight = 146;
+try {
+  const saved = JSON.parse(localStorage.getItem('monitor-layout') || '{}');
+  if (Number.isFinite(saved.split)) split = Math.max(30, Math.min(75, saved.split));
+  if (Number.isFinite(saved.plcHeight)) plcHeight = saved.plcHeight;
+} catch { /* Invalid local layout settings use defaults. */ }
+function saveLayout() {
+  try { localStorage.setItem('monitor-layout', JSON.stringify({ split, plcHeight })); } catch { /* Layout still works without storage. */ }
+}
 function resizeSplit(value) {
   split = Math.max(30, Math.min(75, value));
   document.documentElement.style.setProperty('--split', `${split}%`);
+  divider.setAttribute('aria-valuenow', String(Math.round(split)));
+  saveLayout();
   layout();
 }
 divider.addEventListener('pointerdown', event => { divider.setPointerCapture(event.pointerId); });
@@ -124,13 +175,35 @@ divider.addEventListener('pointermove', event => {
   const b = document.querySelector('.workspace').getBoundingClientRect();
   resizeSplit((event.clientX - b.x) / b.width * 100);
 });
+function resizeRows(value) {
+  const maximum = Math.max(100, document.querySelector('main').getBoundingClientRect().height - 262);
+  plcHeight = Math.max(100, Math.min(maximum, value));
+  document.documentElement.style.setProperty('--plc-height', `${plcHeight}px`);
+  rowDivider.setAttribute('aria-valuenow', String(Math.round(plcHeight)));
+  saveLayout(); layout();
+}
+rowDivider.addEventListener('pointerdown', event => rowDivider.setPointerCapture(event.pointerId));
+rowDivider.addEventListener('pointermove', event => {
+  if (!rowDivider.hasPointerCapture(event.pointerId)) return;
+  resizeRows(document.querySelector('main').getBoundingClientRect().bottom - 34 - event.clientY);
+});
+rowDivider.addEventListener('keydown', event => {
+  if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); resizeRows(plcHeight + (event.key === 'ArrowUp' ? 20 : -20)); }
+});
+window.addEventListener('resize', () => resizeRows(plcHeight));
+resizeSplit(split); resizeRows(plcHeight);
 divider.addEventListener('keydown', event => {
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resizeSplit(split + (event.key === 'ArrowLeft' ? -2 : 2)); }
 });
 function clock() { $('clock').textContent = new Date().toLocaleTimeString('ko-KR', { hour12: false }); }
 clock(); setInterval(clock, 1000);
-window.monitor.settings().then(value => {
+window.monitor.settings().then(async value => {
   settings = value; updateSettings(); layout();
-  navigate('camera'); navigate('youtube');
+  let hidden = false;
+  try { hidden = localStorage.getItem('monitor-browser-hidden') === 'true'; } catch { /* Start with a browser by default. */ }
+  let snapshot = await window.monitor.tabs('list');
+  if (hidden) for (const tab of snapshot.tabs) snapshot = await window.monitor.tabs('close', tab.id);
+  renderTabs(snapshot);
+  navigate('camera'); if (activeBrowserTab) navigate('youtube');
   if (value.warning) toast(value.warning);
 }).catch(error => toast(error.message));

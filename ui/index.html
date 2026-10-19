@@ -10,7 +10,10 @@
 <body>
   <header class="app-header">
     <div class="brand-icon">◉</div><div><h1>People Count <span>Monitor</span></h1><p>카메라부터 PLC까지, 하나의 화면에서</p></div>
-    <div class="header-right"><span class="local-badge">LOCAL WORKSPACE</span><time id="clock"></time><button id="open-settings">⚙ 연결 설정</button></div>
+    <div class="header-right">
+      <div class="recording-controls"><label class="audio-choice"><input id="record-audio" type="checkbox">PC 소리 포함 <span>(다른 앱 소리도 녹음)</span></label><button id="record-start">● 녹화 시작</button><button id="record-stop" disabled>■ 중지</button><button id="record-file" disabled>저장 폴더</button><span id="record-status" role="status" aria-live="polite">녹화 대기</span></div>
+      <button id="add-browser">＋ 웹 창 추가</button><time id="clock"></time><button id="open-settings">⚙ 설정</button>
+    </div>
   </header>
   <main>
     <div class="workspace">
@@ -23,11 +26,13 @@
       <div class="divider" role="separator" aria-label="카메라 화면 비율" aria-orientation="vertical" tabindex="0"></div>
       <section class="panel youtube-panel" aria-label="웹 브라우저">
         <div class="panel-title"><div><span class="eyebrow">02 / WEB</span><h2>유튜브 · 웹 검색</h2></div><span class="status" id="youtube-status">연결 대기</span></div>
+        <div class="tabs-toolbar"><div id="browser-tabs" role="tablist" aria-label="웹 탭"></div><button id="add-tab" aria-label="새 웹 탭">＋</button></div>
         <form id="youtube-form" class="address-bar"><label class="sr-only" for="youtube-url">웹 주소 또는 구글 검색어</label><input id="youtube-url" type="text" maxlength="4096" placeholder="검색어 또는 웹사이트 주소를 입력하세요" required><button>이동 ↗</button></form>
         <div class="browser-tools"><div><button data-panel="youtube" data-action="google">Google</button><button data-panel="youtube" data-action="youtube">YouTube</button></div><div><button data-panel="youtube" data-action="back" aria-label="브라우저 뒤로">←</button><button data-panel="youtube" data-action="forward" aria-label="브라우저 앞으로">→</button><button data-panel="youtube" data-action="reload" aria-label="브라우저 새로고침">↻</button></div></div>
         <div class="browser-space" id="youtube-space"><div><span class="empty-icon youtube-icon">▶</span><h3>영상과 검색을 한곳에서</h3><p>검색어를 입력하면 구글에서 검색합니다.<br>웹사이트 주소나 YouTube 영상 주소도 열 수 있습니다.</p></div></div>
       </section>
     </div>
+    <div class="row-divider" role="separator" aria-label="위아래 화면 비율" aria-orientation="horizontal" tabindex="0"></div>
     <section class="plc-panel" aria-label="PLC 실시간 값">
       <div class="plc-heading"><span class="eyebrow">03 / LIVE PLC</span><h2>피플카운팅 값</h2><span id="plc-endpoint">LS XGT · 192.168.1.2:2004</span></div>
       <div class="reading"><span class="word" id="plc-word">%MW0</span><strong id="plc-value">—</strong><span class="unit">WORD 값</span></div>
@@ -60,5 +65,6 @@
   </dialog>
   <div id="toast" role="status" hidden></div>
   <script src="app.js"></script>
+  <script src="recording.js"></script>
 </body>
 </html>

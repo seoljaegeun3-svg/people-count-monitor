@@ -1,12 +1,15 @@
-const { app, BrowserWindow, WebContentsView, ipcMain } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, screen } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { validatePLC, readWord } = require('./plc');
 const { resolveWebInput, safeWebURL } = require('./web-url');
+const { installRecording } = require('./recording');
 
 app.setName('People Count Monitor');
 let window, panels, settings, settingsPath;
+const browserTabs = [];
+let activeTabId = null, lastBounds = {};
 let enabled = false, generation = 0;
 const peopleCountingPath = '/home/setup/opensdk/html/WiseAI/index.html#/statistics/setup/PEOPLE_COUNTING';
 const legacyCameraURL = `http://192.168.1.100${peopleCountingPath}`;
@@ -26,6 +29,34 @@ function safeURL(panel, input) {
 }
 function emit(channel, data) {
   if (window && !window.isDestroyed()) window.webContents.send(channel, data);
+}
+function tabsSnapshot() {
+  return { tabs: browserTabs.map(({ id, title, url, state, message }) => ({ id, title, url, state, message })), activeId: activeTabId };
+}
+function emitPage(name, tabId, data) {
+  if (tabId) {
+    const tab = browserTabs.find(item => item.id === tabId);
+    if (!tab) return;
+    Object.assign(tab, data);
+    if (data.state && !data.message) delete tab.message;
+    emit('tabs', tabsSnapshot());
+  }
+  emit('page', { panel: name, tabId, ...data });
+}
+function applyLayout() {
+  if (!window || window.isDestroyed()) return;
+  const [width, height] = window.getContentSize();
+  const place = (view, bounds) => {
+    if (!view || view.webContents.isDestroyed()) return;
+    if (!bounds || !['x', 'y', 'width', 'height'].every(key => Number.isFinite(bounds[key]))) {
+      view.setVisible(false); view.setBounds({ x: 0, y: 0, width: 0, height: 0 }); return;
+    }
+    const x = Math.max(0, Math.min(width, Math.round(bounds.x))), y = Math.max(0, Math.min(height, Math.round(bounds.y)));
+    view.setBounds({ x, y, width: Math.max(0, Math.min(width - x, Math.round(bounds.width))), height: Math.max(0, Math.min(height - y, Math.round(bounds.height))) });
+    view.setVisible(true);
+  };
+  place(panels.camera, lastBounds.camera);
+  for (const tab of browserTabs) place(tab.view, tab.id === activeTabId ? lastBounds.youtube : null);
 }
 function cancelCameraAuth() {
   if (!cameraAuth) return;
@@ -65,12 +96,13 @@ app.whenReady().then(async () => {
     if (error.code !== 'ENOENT') settingsWarning = '저장된 설정을 읽지 못해 기본값을 사용합니다. 설정에서 다시 저장하세요.';
   }
   cameraOrigin = new URL(settings.camera).origin;
-  window = new BrowserWindow({ width: 1600, height: 1000, minWidth: 1000, minHeight: 720, backgroundColor: '#0b1120', autoHideMenuBar: true,
+  const workArea = screen.getPrimaryDisplay().workAreaSize;
+  window = new BrowserWindow({ width: Math.min(1600, workArea.width), height: Math.min(1000, workArea.height), minWidth: 860, minHeight: 500, resizable: true, backgroundColor: '#0b1120', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  installRecording(window);
   panels = {};
-  for (const name of ['camera', 'youtube']) {
+  const createPanel = (name, tabId = null) => {
     const view = new WebContentsView({ webPreferences: { partition: `persist:${name}`, nodeIntegration: false, contextIsolation: true, sandbox: true } });
-    panels[name] = view;
     view.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     view.webContents.session.setPermissionCheckHandler(() => false);
     window.contentView.addChildView(view);
@@ -94,7 +126,7 @@ app.whenReady().then(async () => {
         return;
       }
       cameraAuth = { id: randomUUID(), key, callbacks: [callback] };
-      emit('page', { panel: 'camera', state: 'unauthorized', message: '카메라 계정으로 로그인하세요.' });
+      emitPage('camera', null, { state: 'unauthorized', message: '카메라 계정으로 로그인하세요.' });
       emit('camera-auth', { id: cameraAuth.id, origin, realm: authInfo.realm, scheme: authInfo.scheme });
     });
     const guardNavigation = (event, url) => {
@@ -106,34 +138,76 @@ app.whenReady().then(async () => {
     view.webContents.on('did-start-navigation', (_event, url, inPlace, mainFrame) => {
       if (mainFrame && !inPlace && /^https?:/.test(url)) {
         loadFailed = false;
-        emit('page', { panel: name, state: 'loading', url });
+        emitPage(name, tabId, { state: 'loading', url });
       }
     });
     view.webContents.on('did-navigate', (_event, url, code) => {
-      emit('page', { panel: name, url });
+      emitPage(name, tabId, { url });
       if (code >= 200 && code < 400) loadFailed = false;
       if (code >= 400) {
         loadFailed = true;
-        emit('page', { panel: name, state: code === 401 ? 'unauthorized' : 'error', message: code === 401 && name === 'camera' ? '카메라 로그인이 필요합니다. 로그인 / 홈에서 시작하세요.' : `HTTP ${code}` });
+        emitPage(name, tabId, { state: code === 401 ? 'unauthorized' : 'error', message: code === 401 && name === 'camera' ? '카메라 로그인이 필요합니다. 로그인 / 홈에서 시작하세요.' : `HTTP ${code}` });
       }
     });
     view.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
-      if (isMainFrame) emit('page', { panel: name, url });
+      if (isMainFrame) emitPage(name, tabId, { url });
     });
     view.webContents.on('did-finish-load', () => {
-      if (!loadFailed && /^https?:/.test(view.webContents.getURL())) emit('page', { panel: name, state: 'ready' });
+      if (!loadFailed && /^https?:/.test(view.webContents.getURL())) emitPage(name, tabId, { state: 'ready' });
     });
     view.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
       if (isMainFrame && code !== -3) {
         loadFailed = true;
-        emit('page', { panel: name, state: 'error', message: `${description} (${code})` });
+        emitPage(name, tabId, { state: 'error', message: `${description} (${code})` });
       }
     });
-  }
+    if (tabId) view.webContents.on('page-title-updated', (_event, title) => {
+      const tab = browserTabs.find(item => item.id === tabId);
+      if (tab) { tab.title = title || '새 탭'; emit('tabs', tabsSnapshot()); }
+    });
+    return view;
+  };
+  const activateTab = id => {
+    const tab = browserTabs.find(item => item.id === id);
+    if (!tab) throw new Error('웹 탭을 찾을 수 없습니다.');
+    activeTabId = id;
+    panels.youtube = tab.view;
+    applyLayout();
+    emit('tabs', tabsSnapshot());
+  };
+  const addTab = (load = true) => {
+    if (browserTabs.length >= 12) throw new Error('웹 탭은 최대 12개까지 열 수 있습니다.');
+    const id = randomUUID();
+    const tab = { id, title: '새 탭', url: settings.youtube, state: 'loading', view: createPanel('youtube', id) };
+    browserTabs.push(tab);
+    activateTab(id);
+    if (load) tab.view.webContents.loadURL(tab.url).catch(() => {});
+  };
+  panels.camera = createPanel('camera');
+  addTab(false);
   const trusted = event => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('허용되지 않은 요청');
   };
   ipcMain.handle('settings', event => { trusted(event); return { ...settings, warning: settingsWarning }; });
+  ipcMain.handle('browser-tabs', (event, action, id) => {
+    trusted(event);
+    if (action === 'add') addTab();
+    else if (action === 'activate') activateTab(id);
+    else if (action === 'close') {
+      const index = browserTabs.findIndex(tab => tab.id === id);
+      if (index < 0) throw new Error('웹 탭을 찾을 수 없습니다.');
+      const [tab] = browserTabs.splice(index, 1);
+      window.contentView.removeChildView(tab.view);
+      if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close({ waitForBeforeUnload: false });
+      if (id === activeTabId) {
+        activeTabId = browserTabs[Math.min(index, browserTabs.length - 1)]?.id || null;
+        panels.youtube = browserTabs.find(item => item.id === activeTabId)?.view;
+      }
+      applyLayout();
+      emit('tabs', tabsSnapshot());
+    } else if (action !== 'list') throw new Error('잘못된 웹 탭 동작입니다.');
+    return tabsSnapshot();
+  });
   ipcMain.handle('camera-auth', (event, input) => {
     trusted(event);
     if (!cameraAuth || input?.id !== cameraAuth.id) throw new Error('만료된 로그인 요청입니다. 다시 열어주세요.');
@@ -158,13 +232,15 @@ app.whenReady().then(async () => {
   ipcMain.handle('navigate', async (event, name, url) => {
     trusted(event);
     const target = safeURL(name, url);
+    if (!panels[name]) throw new Error('먼저 웹 창 추가를 눌러주세요.');
     if (name === 'camera') { cancelCameraAuth(); cameraOrigin = new URL(target).origin; }
-    emit('page', { panel: name, state: 'loading' });
+    emitPage(name, name === 'youtube' ? activeTabId : null, { state: 'loading' });
     try { await panels[name].webContents.loadURL(target); } catch { /* did-fail-load reports errors. */ }
   });
   ipcMain.handle('action', (event, name, action) => {
     trusted(event);
     if (!['camera', 'youtube'].includes(name)) throw new Error('잘못된 화면');
+    if (!panels[name]) throw new Error('먼저 웹 창 추가를 눌러주세요.');
     const contents = panels[name].webContents;
     if (name === 'youtube' && ['google', 'youtube'].includes(action)) {
       contents.loadURL(action === 'google' ? 'https://www.google.com/' : 'https://www.youtube.com/').catch(() => {});
@@ -185,20 +261,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('connect', (event, on) => { trusted(event); setConnection(on); });
   ipcMain.on('layout', (event, bounds) => {
     trusted(event);
-    const [width, height] = window.getContentSize();
-    for (const name of ['camera', 'youtube']) {
-      const b = bounds?.[name];
-      if (!b) { panels[name].setVisible(false); continue; }
-      if (!['x', 'y', 'width', 'height'].every(key => Number.isFinite(b[key]))) continue;
-      const x = Math.max(0, Math.min(width, Math.round(b.x))), y = Math.max(0, Math.min(height, Math.round(b.y)));
-      panels[name].setBounds({ x, y, width: Math.max(0, Math.min(width - x, Math.round(b.width))), height: Math.max(0, Math.min(height - y, Math.round(b.height))) });
-      panels[name].setVisible(true);
-    }
+    lastBounds = bounds || {};
+    applyLayout();
   });
   window.on('closed', () => {
     cancelCameraAuth();
     enabled = false; generation++;
-    for (const view of Object.values(panels)) if (!view.webContents.isDestroyed()) view.webContents.close();
+    for (const view of [panels.camera, ...browserTabs.map(tab => tab.view)]) if (!view.webContents.isDestroyed()) view.webContents.close();
   });
   await window.loadFile(path.join(__dirname, 'ui/index.html'));
 });

@@ -1,5 +1,5 @@
-// Real Chromium camera authentication and web navigation against local fixtures only.
-const { app, BrowserWindow, session } = require('electron');
+// Real Chromium authentication, tabs, and layout against local fixtures only.
+const { app, BrowserWindow, session, dialog } = require('electron');
 const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -9,6 +9,8 @@ const assert = require('node:assert/strict');
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'people-count-auth-'));
 app.setPath('userData', profile);
+const recordingPath = path.join(profile, 'fixture-recording.webm');
+dialog.showSaveDialog = async () => ({ canceled: false, filePath: recordingPath });
 const username = 'fixture-user', password = 'fixture-password';
 const md5 = value => crypto.createHash('md5').update(value).digest('hex');
 const nonce = 'local-fixture-nonce', realm = 'Camera Digest';
@@ -32,13 +34,14 @@ const foreign = http.createServer((_req, res) => { foreignRequests++; res.writeH
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 async function until(check, message) {
   const deadline = Date.now() + 12000;
+  let lastError;
   while (Date.now() < deadline) {
-    try { if (await check()) return; } catch { /* Renderer may be navigating. */ }
+    try { if (await check()) return; } catch (error) { lastError = error; /* Renderer may be navigating. */ }
     await new Promise(resolve => setTimeout(resolve, 30));
   }
-  throw new Error(`Timed out: ${message}`);
+  throw new Error(`Timed out: ${message}${lastError ? ` (${lastError.message})` : ''}`);
 }
-const timeout = setTimeout(() => { console.error('Camera authentication smoke test timed out'); app.exit(1); }, 60000);
+const timeout = setTimeout(() => { console.error('Camera and browser smoke test timed out'); app.exit(1); }, 90000);
 (async () => {
   await Promise.all([app.whenReady(), listen(server), listen(foreign)]);
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -123,6 +126,157 @@ const timeout = setTimeout(() => { console.error('Camera authentication smoke te
   assert.equal(JSON.parse(fs.readFileSync(path.join(profile, 'settings.json'), 'utf8')).youtube, 'https://www.google.com/');
   assert(webRequests.some(url => url.includes('google.com/search?')));
   console.log('PASS: Google search, website address, new-window links, back/forward, shortcuts, saved browser start page, sandbox isolation');
+
+  const tabs = () => ui("window.monitor.tabs('list')");
+  const tabButton = (attribute, id) => ui(`document.querySelector('[${attribute}="${id}"]').click(); true;`);
+  const browserViews = () => win.contentView.children.filter(view => view.webContents !== camera);
+  const effectiveTabs = async () => {
+    const state = await tabs();
+    const views = browserViews();
+    assert.equal(views.length, state.tabs.length, 'every tab must have exactly one native view');
+    assert.equal(win.contentView.children[0].webContents, camera, 'camera view must survive tab changes');
+    const visible = views.filter(view => view.getVisible());
+    assert.equal(visible.length, state.tabs.length ? 1 : 0, 'only the active browser view is visible');
+    if (state.tabs.length) {
+      const active = state.tabs.find(tab => tab.id === state.activeId);
+      assert(active, 'active tab must exist');
+      assert.equal(visible[0].webContents.getURL(), active.url, 'visible content belongs to active tab');
+      assert.equal(await ui("document.getElementById('youtube-url').value"), active.url, 'address field follows selected tab');
+    }
+    return state;
+  };
+  await until(async () => { await effectiveTabs(); return true; }, 'initial browser tab layout');
+  const first = await tabs();
+  assert.equal(first.tabs.length, 1);
+  const firstId = first.activeId;
+  const firstURL = browser.getURL();
+  await ui("document.getElementById('add-browser').click(); true;");
+  await until(async () => (await tabs()).tabs.length === 2, 'new browser tab');
+  const second = await tabs();
+  const secondId = second.activeId;
+  assert.notEqual(secondId, firstId);
+  const secondView = browserViews().find(view => view.webContents !== browser);
+  const secondContents = secondView.webContents;
+  await until(() => secondContents.getURL() === 'https://www.google.com/', 'new tab uses saved start page');
+  await navigateWeb('example.net/second-tab');
+  await until(() => secondContents.getURL() === 'https://example.net/second-tab', 'navigation goes to active tab');
+  assert.equal(browser.getURL(), firstURL, 'navigation must not overwrite inactive tab');
+  await until(async () => { await effectiveTabs(); return true; }, 'second tab layout and address');
+  await tabButton('data-tab-id', firstId);
+  await until(async () => (await tabs()).activeId === firstId && browserViews().filter(view => view.getVisible())[0]?.webContents === browser, 'switch to original tab');
+  await until(async () => { await effectiveTabs(); return true; }, 'first tab address restored');
+  assert.equal(secondContents.getURL(), 'https://example.net/second-tab', 'switching preserves inactive page');
+  await tabButton('data-tab-id', secondId);
+  await until(async () => (await tabs()).activeId === secondId, 'switch back to new tab');
+  await until(async () => { await effectiveTabs(); return true; }, 'second tab restored');
+  assert.equal(await secondContents.executeJavaScript("typeof require + '/' + typeof window.monitor"), 'undefined/undefined', 'new tabs are sandboxed');
+  console.log('PASS: add and switch browser tabs, independent navigation, start page, single visible native view, sandbox isolation');
+
+  const bounds = () => ui(`(() => {
+    const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height }; };
+    return { workspace:rect('.workspace'), plc:rect('.plc-panel'), camera:rect('.camera-panel'), browser:rect('.youtube-panel') };
+  })()`);
+  const press = (selector, key) => ui(`document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new KeyboardEvent('keydown', {key:${JSON.stringify(key)}, bubbles:true})); true;`);
+  const nativeBoundsFit = () => {
+    const [width, height] = win.getContentSize();
+    for (const view of win.contentView.children) {
+      const b = view.getBounds();
+      assert(b.x >= 0 && b.y >= 0 && b.width >= 0 && b.height >= 0, 'native view bounds must be nonnegative');
+      assert(b.x + b.width <= width && b.y + b.height <= height, 'native views must fit within app content');
+      if (view.getVisible()) assert(b.width > 0 && b.height > 0, 'empty native views must be hidden');
+    }
+  };
+  const beforeHorizontal = await bounds();
+  await press('.divider', 'ArrowRight');
+  await until(async () => (await bounds()).camera.width > beforeHorizontal.camera.width + 2, 'horizontal resize grows camera');
+  assert((await bounds()).browser.width < beforeHorizontal.browser.width);
+  await press('.divider', 'ArrowLeft');
+  await until(async () => Math.abs((await bounds()).camera.width - beforeHorizontal.camera.width) < 2, 'horizontal resize returns');
+  const beforeVertical = await bounds();
+  await press('.row-divider', 'ArrowUp');
+  await until(async () => (await bounds()).plc.height > beforeVertical.plc.height + 2, 'vertical resize grows PLC area');
+  assert((await bounds()).workspace.height < beforeVertical.workspace.height);
+  await press('.row-divider', 'ArrowDown');
+  await until(async () => Math.abs((await bounds()).workspace.height - beforeVertical.workspace.height) < 2, 'vertical resize returns');
+  assert(win.getMinimumSize()[1] <= 500, 'window supports reducing height to 500 pixels');
+  const originalSize = win.getContentSize();
+  win.setContentSize(1000, 520);
+  await until(async () => (await bounds()).workspace.height < beforeVertical.workspace.height, 'compact window reflows');
+  await until(() => { nativeBoundsFit(); return true; }, 'compact native view bounds');
+  const compact = await bounds();
+  assert(compact.plc.y + compact.plc.height <= win.getContentSize()[1], 'PLC remains within short window');
+  for (let i = 0; i < 30; i++) await press('.row-divider', 'ArrowUp');
+  await until(() => { nativeBoundsFit(); return true; }, 'clamped vertical layout');
+  win.setContentSize(...originalSize);
+  for (let i = 0; i < 30; i++) await press('.row-divider', 'ArrowDown');
+  await until(() => { nativeBoundsFit(); return true; }, 'restored native view bounds');
+  console.log('PASS: horizontal and vertical keyboard resizing, compact window height, clamped native view bounds');
+
+  await tabButton('data-close-tab', secondId);
+  await until(async () => (await tabs()).tabs.length === 1 && secondContents.isDestroyed(), 'closing active tab destroys its native content');
+  await until(async () => { await effectiveTabs(); return true; }, 'remaining tab becomes active');
+  assert.equal((await tabs()).activeId, firstId);
+  const beforeClose = await bounds();
+  await tabButton('data-close-tab', firstId);
+  await until(async () => (await tabs()).tabs.length === 0 && browser.isDestroyed(), 'closing last browser tab');
+  await until(() => ui("document.querySelector('.youtube-panel').getBoundingClientRect().width === 0 && document.querySelector('.divider').getBoundingClientRect().width === 0"), 'last browser close hides browser panel and divider');
+  assert.equal(win.contentView.children.length, 1, 'closing all tabs leaves only camera native view');
+  assert((await bounds()).camera.width > beforeClose.camera.width + 20, 'camera expands when all browser tabs close');
+  assert.equal(await ui("document.getElementById('add-browser').getBoundingClientRect().width > 0"), true, 'add browser stays accessible with no tabs');
+  await ui("document.getElementById('add-browser').click(); true;");
+  await until(async () => (await tabs()).tabs.length === 1, 'reopen browser after all tabs closed');
+  await until(async () => { await effectiveTabs(); return true; }, 'reopened browser visible with fresh native content');
+  assert.equal(BrowserWindow.getAllWindows().length, 1);
+  nativeBoundsFit();
+  console.log('PASS: close active and last tab, destroy native content, full-width camera, reopen browser without orphan views');
+
+  const recordButton = await ui("document.getElementById('record-audio').checked = false; (() => { const b = document.getElementById('record-start').getBoundingClientRect(); return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)}; })()");
+  win.focus();
+  win.webContents.focus();
+  win.webContents.sendInputEvent({ type: 'mouseDown', ...recordButton, button: 'left', clickCount: 1 });
+  win.webContents.sendInputEvent({ type: 'mouseUp', ...recordButton, button: 'left', clickCount: 1 });
+  await until(() => ui("document.getElementById('record-status').dataset.state === 'recording'"), 'own-window recording starts').catch(async error => {
+    throw new Error(`${error.message}: ${await ui("document.getElementById('record-status').textContent")}`);
+  });
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  await ui("document.getElementById('record-stop').click(); true;");
+  await until(() => fs.existsSync(recordingPath) && fs.statSync(recordingPath).size > 1024, 'recorded video is written');
+  await until(() => ui("document.getElementById('record-status').dataset.state === 'idle' && document.getElementById('record-status').textContent.includes('저장 완료')"), 'recording finalizes');
+  const recording = fs.readFileSync(recordingPath);
+  assert.equal(recording.subarray(0, 4).toString('hex'), '1a45dfa3', 'recording is a WebM container');
+  assert(recording.includes(Buffer.from('V_VP')), 'recording contains a video track');
+  assert.equal(await ui("document.getElementById('record-stop').disabled"), true);
+  const playbackPath = path.join(profile, 'recording-playback.html');
+  fs.writeFileSync(playbackPath, '<!doctype html><video src="fixture-recording.webm" muted preload="auto"></video>');
+  const playback = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false } });
+  try {
+    await playback.loadFile(playbackPath);
+    await until(() => playback.webContents.executeJavaScript("document.querySelector('video').readyState >= 2 && document.querySelector('video').videoWidth > 0"), 'saved recording decodes in Chromium');
+    const dimensions = await playback.webContents.executeJavaScript("({width:document.querySelector('video').videoWidth,height:document.querySelector('video').videoHeight})");
+    assert(dimensions.width > 0 && dimensions.height > 0);
+    await playback.webContents.executeJavaScript("document.querySelector('video').play().then(() => true)");
+    await until(async () => {
+      const frame = await playback.webContents.executeJavaScript(`(() => {
+        const video = document.querySelector('video');
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        const context = canvas.getContext('2d');
+        context.drawImage(video, 0, 0);
+        const sample = x => {
+          const data = context.getImageData(Math.round(canvas.width*x)-2, Math.round(canvas.height*.5)-2, 5, 5).data;
+          let brightness = 0;
+          for (let i = 0; i < data.length; i += 4) brightness += (data[i]+data[i+1]+data[i+2])/3;
+          return Math.round(brightness/25);
+        };
+        return {time:video.currentTime,camera:sample(.25),browser:sample(.8)};
+      })()`);
+      assert(frame.time >= .3, 'allow the capture to warm up');
+      assert(frame.camera > 180, `recording must contain the white native camera page, brightness=${frame.camera}`);
+      assert(frame.browser > 180, `recording must contain the white native browser page, brightness=${frame.browser}`);
+      return true;
+    }, 'recorded frame contains camera and browser native views');
+    console.log(`PASS: own-window recording starts and stops, WebM saved and decoded with camera/browser pixels (${recording.length} bytes, ${dimensions.width}×${dimensions.height})`);
+  } finally { playback.destroy(); }
 })().then(() => {
   clearTimeout(timeout); server.closeAllConnections(); foreign.closeAllConnections(); server.close(); foreign.close(); app.exit(0);
 }, error => {
