@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 
-async function fixture(t, convert, filesystem = fs) {
+async function fixture(t, convert, filesystem = fs, options = {}) {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'people-count-auto-test-'));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
   const conversions = [], statuses = [], errors = [];
@@ -22,7 +22,7 @@ async function fixture(t, convert, filesystem = fs) {
   vm.runInNewContext('(function(require,module){' + source + '\n})', { Buffer })(
     name => name === './mp4' ? { concatToMP4: converter } : name === 'node:fs/promises' ? filesystem : require(name), module);
   let time = 1_000_000;
-  const manager = await module.exports.createAutoRecording({ folder, now: () => time,
+  const manager = await module.exports.createAutoRecording({ folder, ...options, now: () => time,
     onStatus: status => statuses.push(status), onError: error => errors.push(error) });
   const setTime = value => { time = 1_000_000 + value; };
   const segment = async (start, end) => {
@@ -55,7 +55,7 @@ test('first reading and reconnect establish a baseline; increases and decreases 
   assert.equal(f.conversions[0].contents.at(-1), '22000-24000', 'decrease extends the tail through ten seconds after the last change');
   assert.equal(f.errors.length, 0);
   assert(f.statuses.some(value => value.state === 'saved'));
-  assert.deepEqual((await fs.readdir(f.folder)).filter(name => !name.endsWith('.mp4')), []);
+  assert.deepEqual((await fs.readdir(f.folder)).filter(name => !/\.(mp4|jsonl)$/.test(name)), []);
 });
 
 test('idle automatic recording keeps only a bounded rolling buffer and writes no MP4', async t => {
@@ -90,17 +90,19 @@ test('continuous passages split at sixty seconds without missing or duplicating 
 });
 
 test('a slow background conversion keeps shared pre-roll safe while collecting another passage', async t => {
-  let release;
+  let release, markStarted;
   const blocked = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { markStarted = resolve; });
+  t.after(() => release());
   const f = await fixture(t, async (_parts, destination, index) => {
-    if (index === 1) await blocked;
+    if (index === 1) { markStarted(); await blocked; }
     await fs.writeFile(destination, 'complete MP4');
   });
   f.plc(0);
   await f.feed(0, 6000);
   f.plc(1);
   await f.feed(6000, 16000);
-  for (let i = 0; !f.conversions.length && i < 10; i++) await new Promise(setImmediate);
+  await started;
   assert.equal(f.conversions.length, 1);
   f.setTime(17000); f.plc(0);
   await f.feed(16000, 28000);
@@ -230,5 +232,106 @@ test('encoder cleanup and incoming-segment cleanup do not remove each other\'s s
   assert.equal(result.saved, 2);
   assert.deepEqual(f.conversions[1].contents, ['20000-22000', '22000-24000', '24000-26000',
     '26000-28000', '28000-30000', '30000-32000', '32000-34000', '34000-36000']);
-  assert.deepEqual((await fs.readdir(f.folder)).filter(name => !name.endsWith('.mp4')), []);
+  assert.deepEqual((await fs.readdir(f.folder)).filter(name => !/\.(mp4|jsonl)$/.test(name)), []);
+});
+
+async function observedPassage(t, { values = time => time >= 10000 ? 6 : 5,
+  events = [{ at: 10000, direction: 'in' }], uncertainty, motion = false, plcAvailable = true,
+  observationFilter = () => true } = {}) {
+  const f = await fixture(t, undefined, fs, { mapping: 'occupancy' });
+  for (let time = 0; time <= 20000; time += 500) {
+    f.setTime(time);
+    if (plcAvailable) f.plc(values(time));
+    if (observationFilter(time)) f.manager.onObservation({ at: 1_000_000 + time,
+      events: events.filter(event => event.at === time).map(event => ({ ...event, at: 1_000_000 + event.at })),
+      uncertain: uncertainty && time === 11000 ? [uncertainty] : [], healthy: true });
+    if (motion && time === 10000) f.manager.onMotion({ at: 1_000_000 + time });
+    if (time && time % 2000 === 0) await f.segment(time - 2000, time);
+  }
+  const result = await f.manager.close();
+  const files = await fs.readdir(f.folder);
+  const reviews = [];
+  for (const filename of files.filter(name => name.endsWith('.jsonl'))) {
+    for (const line of (await fs.readFile(path.join(f.folder, filename), 'utf8')).trim().split('\n')) reviews.push(JSON.parse(line));
+  }
+  return { ...f, result, files, reviews };
+}
+
+test('healthy matched camera and PLC passages keep the audit record without encoding a video', async t => {
+  const f = await observedPassage(t);
+  assert.equal(f.result.error, '');
+  assert.equal(f.result.saved, 0, JSON.stringify(f.reviews));
+  assert.equal(f.result.matched, 1);
+  assert.equal(f.conversions.length, 0, 'matching events must never enter FFmpeg');
+  assert.equal(f.files.length, 1, 'all rolling originals are cleaned up');
+  assert.match(f.files[0], /\.jsonl$/);
+  assert.equal(f.result.path, path.join(f.folder, f.files[0]));
+  assert.equal(f.reviews.length, 1);
+  assert.equal(f.reviews[0].status, 'matched');
+  assert.equal(f.reviews[0].video, null);
+  assert.deepEqual([f.reviews[0].videoIn, f.reviews[0].videoOut, f.reviews[0].plcIn, f.reviews[0].plcOut], [1, 0, 1, 0]);
+  assert(f.statuses.some(value => value.state === 'matched' && value.matched === 1));
+});
+
+test('a camera crossing with an unchanged PLC value preserves a mismatch MP4 and its audit', async t => {
+  const f = await observedPassage(t, { values: () => 5 });
+  assert.equal(f.result.error, '');
+  assert.equal(f.result.saved, 1);
+  assert.equal(f.result.matched, 0);
+  assert.equal(f.conversions.length, 1);
+  assert.match(path.basename(f.result.path), /^People-Count-Mismatch-.*\.mp4$/);
+  assert.deepEqual(f.files.map(name => path.extname(name)).sort(), ['.jsonl', '.mp4']);
+  assert.equal(f.reviews[0].status, 'mismatch');
+  assert.equal(f.reviews[0].videoIn, 1);
+  assert.equal(f.reviews[0].plcIn, 0);
+  assert.equal(f.reviews[0].video, f.result.path);
+});
+
+test('two independently observed entries and one PLC increment preserve the differing counts', async t => {
+  const f = await observedPassage(t, { events: [{ at: 10000, direction: 'in' }, { at: 10000, direction: 'in' }] });
+  assert.equal(f.result.error, '');
+  assert.equal(f.result.saved, 1);
+  assert.equal(f.result.matched, 0);
+  assert.equal(f.reviews[0].status, 'mismatch');
+  assert.deepEqual([f.reviews[0].videoIn, f.reviews[0].plcIn], [2, 1]);
+  assert.match(path.basename(f.result.path), /^People-Count-Mismatch-/);
+  assert.equal(f.files.filter(name => name.endsWith('.mp4')).length, 1);
+  assert(!f.files.some(name => name.startsWith('.people-count-auto-')));
+});
+
+test('equal counts with an uncertain visual observation preserve a review MP4', async t => {
+  const f = await observedPassage(t, { uncertainty: '사람이 겹쳐 통행 추적이 불확실합니다.' });
+  assert.equal(f.result.error, '');
+  assert.equal(f.result.saved, 1);
+  assert.equal(f.result.matched, 0);
+  assert.equal(f.reviews[0].status, 'uncertain');
+  assert.deepEqual([f.reviews[0].videoIn, f.reviews[0].plcIn], [1, 1]);
+  assert(f.reviews[0].reasons.includes('사람이 겹쳐 통행 추적이 불확실합니다.'));
+  assert.match(path.basename(f.result.path), /^People-Count-Review-/);
+  assert.equal(f.reviews[0].video, f.result.path);
+});
+
+test('camera motion without PLC readings retains an uncertain clip instead of declaring a match', async t => {
+  const f = await observedPassage(t, { events: [], motion: true, plcAvailable: false });
+  assert.equal(f.result.error, '');
+  assert.equal(f.result.saved, 1);
+  assert.equal(f.result.matched, 0);
+  assert.equal(f.conversions.length, 1);
+  assert.equal(f.reviews[0].status, 'uncertain');
+  assert.equal(f.reviews[0].videoIn, 0);
+  assert(f.reviews[0].reasons.some(reason => reason.includes('PLC')));
+  assert(f.reviews[0].reasons.some(reason => reason.includes('움직임')));
+  assert.match(path.basename(f.result.path), /^People-Count-Review-/);
+});
+
+test('matching counts with a long observation gap retain the video even when both ends were analyzed', async t => {
+  const f = await observedPassage(t, { observationFilter: time => time <= 10500 || time >= 18000 });
+  assert.equal(f.result.error, '');
+  assert.equal(f.result.saved, 1);
+  assert.equal(f.result.matched, 0);
+  assert.deepEqual([f.reviews[0].videoIn, f.reviews[0].plcIn], [1, 1]);
+  assert.equal(f.reviews[0].status, 'uncertain');
+  assert(f.reviews[0].reasons.some(reason => /분석|영상/.test(reason)));
+  assert.match(path.basename(f.result.path), /^People-Count-Review-/);
+  assert.equal(f.conversions.length, 1);
 });

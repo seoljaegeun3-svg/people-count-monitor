@@ -7,7 +7,7 @@ const { EventEmitter } = require('node:events');
 
 for (const mode of ['normal', 'recorder-error', 'save-cancel', 'disk-error']) {
   test(`recording UI handles ${mode} without losing the final chunk or leaving capture running`, async () => {
-    const ids = ['record-start', 'record-stop', 'record-audio', 'record-convert', 'record-status', 'record-file'];
+    const ids = ['record-start', 'record-stop', 'record-audio', 'record-convert', 'record-status', 'record-file', 'comparison-settings'];
     const nodes = Object.fromEntries(ids.map(id => [id, {
       dataset: {}, events: {}, disabled: id === 'record-file',
       addEventListener(name, handler) { this.events[name] = handler; }
@@ -44,7 +44,7 @@ for (const mode of ['normal', 'recorder-error', 'save-cancel', 'disk-error']) {
       onRecordingStop() {}, onRecordingProgress() {}, recordingReveal: async () => {}
     };
     vm.runInNewContext(await fs.readFile(path.join(__dirname, 'ui', 'recording.js'), 'utf8'), {
-      window: { monitor: api, MediaRecorder }, MediaRecorder,
+      window: { monitor: api, MediaRecorder, addEventListener() {} }, MediaRecorder,
       navigator: { mediaDevices: { getDisplayMedia: async () => stream } },
       document: { getElementById: id => nodes[id] },
       setInterval: () => 1, clearInterval() {}, setTimeout, clearTimeout, Blob, Date, toast() {}
@@ -56,11 +56,13 @@ for (const mode of ['normal', 'recorder-error', 'save-cancel', 'disk-error']) {
       assert.equal(finished, 0);
       assert.equal(nodes['record-status'].dataset.state, 'idle');
       assert.equal(nodes['record-start'].disabled, false);
+      assert.equal(nodes['comparison-settings'].disabled, false);
       return;
     }
     assert.equal(nodes['record-status'].dataset.state, 'recording');
     assert.equal(nodes['record-start'].disabled, true);
     assert.equal(nodes['record-convert'].disabled, true);
+    assert.equal(nodes['comparison-settings'].disabled, true);
     assert.equal(nodes['record-stop'].disabled, false);
     recorder.emit('dataavailable', { data: new Blob(['first']) });
     if (mode === 'recorder-error') {
@@ -78,6 +80,7 @@ for (const mode of ['normal', 'recorder-error', 'save-cancel', 'disk-error']) {
     assert.equal(stoppedTracks, 1);
     assert.equal(nodes['record-start'].disabled, false);
     assert.equal(nodes['record-convert'].disabled, false);
+    assert.equal(nodes['comparison-settings'].disabled, false);
     assert.equal(nodes['record-stop'].disabled, true);
     if (mode === 'disk-error') {
       assert.match(finishError, /disk full/);
@@ -94,7 +97,7 @@ for (const mode of ['normal', 'recorder-error', 'save-cancel', 'disk-error']) {
 
 for (const mode of ['success', 'cancel', 'failure']) {
   test(`existing WebM conversion UI handles ${mode} and restores controls`, async () => {
-    const ids = ['record-start', 'record-stop', 'record-audio', 'record-convert', 'record-status', 'record-file'];
+    const ids = ['record-start', 'record-stop', 'record-audio', 'record-convert', 'record-status', 'record-file', 'comparison-settings'];
     const nodes = Object.fromEntries(ids.map(id => [id, {
       dataset: {}, events: {}, addEventListener(name, handler) { this.events[name] = handler; }
     }]));
@@ -109,13 +112,14 @@ for (const mode of ['success', 'cancel', 'failure']) {
       }
     };
     vm.runInNewContext(await fs.readFile(path.join(__dirname, 'ui', 'recording.js'), 'utf8'), {
-      window: { monitor: api }, navigator: {},
+      window: { monitor: api, addEventListener() {} }, navigator: {},
       document: { getElementById: id => nodes[id] },
       setInterval, clearInterval, setTimeout, clearTimeout, Date, toast() {}
     });
     const conversion = nodes['record-convert'].events.click();
     assert.equal(nodes['record-start'].disabled, true);
     assert.equal(nodes['record-convert'].disabled, true);
+    assert.equal(nodes['comparison-settings'].disabled, true);
     assert.equal(nodes['record-stop'].disabled, true);
     progress({ message: 'MP4 변환 중…' });
     assert.match(nodes['record-status'].textContent, /MP4 변환 중/);
@@ -124,20 +128,21 @@ for (const mode of ['success', 'cancel', 'failure']) {
     assert.equal(nodes['record-status'].dataset.state, 'idle');
     assert.equal(nodes['record-start'].disabled, false);
     assert.equal(nodes['record-convert'].disabled, false);
+    assert.equal(nodes['comparison-settings'].disabled, false);
     assert.match(nodes['record-status'].textContent, mode === 'success' ? /저장 완료: old.mp4/ : mode === 'cancel' ? /취소/ : /disk full/);
     if (mode === 'success') assert.equal(nodes['record-file'].disabled, false);
   });
 }
 
 async function autoFixture(options = {}) {
-  const ids = ['record-start', 'record-stop', 'record-audio', 'record-convert', 'record-status', 'record-file', 'record-auto', 'record-auto-status'];
+  const ids = ['record-start', 'record-stop', 'record-audio', 'record-convert', 'record-status', 'record-file', 'record-auto', 'record-auto-status', 'comparison-settings'];
   const nodes = Object.fromEntries(ids.map(id => [id, {
     dataset: {}, events: {}, attributes: {},
     addEventListener(name, handler) { this.events[name] = handler; },
     setAttribute(name, value) { this.attributes[name] = value; }
   }]));
   let now = 10_000, nextTimer = 0, finished = 0, stoppedTracks = 0, stopFromMain, progress, prepareOptions, captureOptions;
-  const timers = new Map(), recorders = [], segments = [], calls = [];
+  const timers = new Map(), recorders = [], segments = [], calls = [], dispatched = [], windowEvents = {};
   const track = { events: {}, stop() { stoppedTracks++; }, addEventListener(name, handler) { this.events[name] = handler; } };
   const stream = { getTracks: () => [track], getVideoTracks: () => [track], getAudioTracks: () => [] };
   class MediaRecorder extends EventEmitter {
@@ -159,6 +164,7 @@ async function autoFixture(options = {}) {
     }
   }
   const api = {
+    comparisonSettings: async () => ({ configured: options.configured !== false }),
     recordingPrepare: async value => { prepareOptions = value; return { id: 'auto-session' }; },
     recordingAutoStart: async () => {
       if (options.start) await options.start();
@@ -170,13 +176,20 @@ async function autoFixture(options = {}) {
       if (options.upload) await options.upload();
       segments.push({ text: Buffer.from(buffer).toString(), timing });
     },
-    recordingFinish: async (id, error) => { finished++; calls.push('finish'); return { saved: segments.length ? 1 : 0, folder: 'C:\\Videos', error }; },
+    recordingFinish: async (id, error) => {
+      finished++; calls.push('finish');
+      return { saved: options.saved ?? (segments.length ? 1 : 0), matched: options.matched || 0, folder: 'C:\\Videos', error };
+    },
     onRecordingStop(handler) { stopFromMain = handler; },
     onRecordingProgress(handler) { progress = handler; }
   };
   const FakeDate = class extends Date { static now() { return now; } };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, 'ui', 'recording.js'), 'utf8'), {
-    window: { monitor: api, MediaRecorder }, MediaRecorder, Blob,
+    window: {
+      monitor: api, MediaRecorder,
+      addEventListener(name, handler) { windowEvents[name] = handler; },
+      dispatchEvent(event) { dispatched.push(event.type); windowEvents[event.type]?.(event); }
+    }, MediaRecorder, Blob, Event,
     navigator: { mediaDevices: { getDisplayMedia: async value => { captureOptions = value; return stream; } } },
     document: { getElementById: id => nodes[id] },
     Date: FakeDate, toast() {}, setInterval: () => 1, clearInterval() {},
@@ -185,7 +198,7 @@ async function autoFixture(options = {}) {
   });
   const flush = async () => { for (let attempt = 0; attempt < 12; attempt++) await new Promise(setImmediate); };
   return {
-    nodes, api, recorders, segments, calls, track, progress: value => progress(value), stopFromMain: () => stopFromMain(), flush,
+    nodes, api, recorders, segments, calls, track, dispatched, windowEvents, progress: value => progress(value), stopFromMain: () => stopFromMain(), flush,
     async advance(milliseconds) {
       now += milliseconds;
       for (const [token, timer] of [...timers]) if (timer.at <= now) { timers.delete(token); timer.callback(); }
@@ -200,13 +213,13 @@ test('automatic recording starts disabled, records complete independent segments
   const fixture = await autoFixture();
   const { nodes } = fixture;
   assert.equal(nodes['record-auto'].attributes['aria-pressed'], 'false');
-  assert.match(nodes['record-auto-status'].textContent, /전 5초.*후 10초/);
+  assert.match(nodes['record-auto-status'].textContent, /카메라 사람 수와 PLC 비교.*불일치.*판단 보류/);
   await nodes['record-auto'].events.click();
   assert.equal(fixture.prepareOptions.automatic, true);
   assert.equal(fixture.captureOptions.audio, false);
   assert.equal(nodes['record-status'].dataset.state, 'automatic');
   assert.equal(nodes['record-auto'].attributes['aria-pressed'], 'true');
-  for (const id of ['record-start', 'record-stop', 'record-convert', 'record-audio']) assert.equal(nodes[id].disabled, true);
+  for (const id of ['record-start', 'record-stop', 'record-convert', 'record-audio', 'comparison-settings']) assert.equal(nodes[id].disabled, true);
   assert.equal(nodes['record-auto'].disabled, false);
   await fixture.advance(2000);
   await fixture.advance(2000);
@@ -215,8 +228,8 @@ test('automatic recording starts disabled, records complete independent segments
   assert.deepEqual(fixture.segments.map(item => item.text), ['header-1:frame-1:final-1', 'header-2:frame-2:final-2']);
   assert.deepEqual(fixture.segments.map(item => [item.timing.start, item.timing.end]), [[10000, 12000], [12000, 14000]]);
   assert.ok(fixture.calls.indexOf('start-2') < fixture.calls.indexOf('upload-1'));
-  fixture.progress({ mode: 'auto', state: 'saved', message: 'MP4 저장 완료', saved: 1 });
-  assert.equal(nodes['record-auto-status'].textContent, 'MP4 저장 완료');
+  fixture.progress({ mode: 'auto', state: 'saved', message: 'MP4 저장 완료', matched: 2, saved: 1 });
+  assert.match(nodes['record-auto-status'].textContent, /MP4 저장 완료.*일치 2건.*확인용 MP4 1개/);
   assert.equal(nodes['record-file'].disabled, false);
   await fixture.advance(500);
   nodes['record-auto'].events.click();
@@ -230,7 +243,7 @@ test('automatic recording starts disabled, records complete independent segments
   assert.equal(fixture.stoppedTracks, 1);
   assert.equal(nodes['record-status'].dataset.state, 'idle');
   assert.equal(nodes['record-auto'].attributes['aria-pressed'], 'false');
-  for (const id of ['record-start', 'record-convert', 'record-audio', 'record-auto']) assert.equal(nodes[id].disabled, false);
+  for (const id of ['record-start', 'record-convert', 'record-audio', 'record-auto', 'comparison-settings']) assert.equal(nodes[id].disabled, false);
   await fixture.advance(10_000);
   assert.equal(fixture.recorders.length, 3);
 });
@@ -352,4 +365,50 @@ test('an encoder restart failure saves the completed segment and releases captur
   assert.equal(fixture.stoppedTracks, 1);
   assert.equal(fixture.nodes['record-status'].dataset.state, 'idle');
   assert.match(fixture.nodes['record-status'].textContent, /encoder restart failed/);
+});
+
+test('automatic recording opens comparison setup without capturing and requires a fresh click afterward', async () => {
+  const fixture = await autoFixture({ configured: false });
+  await fixture.nodes['record-auto'].events.click();
+  assert.deepEqual(fixture.dispatched, ['open-comparison-settings']);
+  assert.equal(fixture.prepareOptions, undefined);
+  assert.equal(fixture.captureOptions, undefined);
+  assert.equal(fixture.recorders.length, 0);
+  assert.equal(fixture.nodes['record-status'].dataset.state, 'idle');
+  assert.equal(fixture.nodes['comparison-settings'].disabled, false);
+  assert.match(fixture.nodes['record-status'].textContent, /먼저 설정.*다시 켜세요/);
+  fixture.api.comparisonSettings = async () => ({ configured: true });
+  fixture.windowEvents['comparison-settings-changed']({ detail: { configured: true } });
+  await fixture.flush();
+  assert.equal(fixture.prepareOptions, undefined);
+  assert.equal(fixture.captureOptions, undefined);
+  await fixture.nodes['record-auto'].events.click();
+  assert.equal(fixture.prepareOptions.automatic, true);
+  assert.equal(fixture.recorders.length, 1);
+  assert.equal(fixture.nodes['record-status'].dataset.state, 'automatic');
+  fixture.stopFromMain();
+  await fixture.flush();
+});
+
+test('automatic comparison setup errors restore controls without requesting capture', async () => {
+  const fixture = await autoFixture();
+  fixture.api.comparisonSettings = async () => { throw new Error('comparison settings unavailable'); };
+  await fixture.nodes['record-auto'].events.click();
+  assert.equal(fixture.prepareOptions, undefined);
+  assert.equal(fixture.captureOptions, undefined);
+  assert.equal(fixture.nodes['record-status'].dataset.state, 'idle');
+  assert.equal(fixture.nodes['comparison-settings'].disabled, false);
+  assert.match(fixture.nodes['record-status'].textContent, /comparison settings unavailable/);
+});
+
+test('automatic recording reports discarded matches separately from retained clips when switched off', async () => {
+  const fixture = await autoFixture({ matched: 3, saved: 0 });
+  await fixture.nodes['record-auto'].events.click();
+  fixture.progress({ mode: 'auto', state: 'matched', message: '카메라와 PLC 일치 · 구간 제외', matched: 3, saved: 0 });
+  assert.match(fixture.nodes['record-auto-status'].textContent, /일치 3건.*MP4 0개/);
+  fixture.stopFromMain();
+  await fixture.flush();
+  assert.match(fixture.nodes['record-status'].textContent, /자동 녹화 종료.*일치 3건.*MP4 0개 저장/);
+  assert.match(fixture.nodes['record-auto-status'].textContent, /일치 3건.*MP4 0개 저장.*꺼짐/);
+  assert.equal(fixture.nodes['comparison-settings'].disabled, false);
 });

@@ -9,3 +9,7 @@ People Count Monitor uses FFmpeg in a separate local process to create seekable 
 - Windows build provider and source/build instructions: https://www.gyan.dev/ffmpeg/builds/. The bundled Windows build identifies FFmpeg revision https://github.com/FFmpeg/FFmpeg/commit/e38092ef93 in its README. Consult the accompanying README for exact build and library versions.
 
 The converter binary and its accompanying notices are unpacked under `resources/app.asar.unpacked/node_modules/ffmpeg-static/` in the application. Other dependency licenses remain with their respective packages in the application archive.
+
+# Bundled person detection
+
+YOLOX-tiny (Megvii, Apache-2.0) runs locally with ONNX Runtime (Microsoft, MIT) using the CPU provider. The model provenance, SHA-256, complete licenses and runtime third-party notices are included under `models/`; see [models/README.md](models/README.md). No model is downloaded at runtime.

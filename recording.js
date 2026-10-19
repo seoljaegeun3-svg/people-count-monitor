@@ -4,13 +4,16 @@ const { pathToFileURL } = require('node:url');
 const { randomUUID } = require('node:crypto');
 const { convertToMP4 } = require('./mp4');
 const { createAutoRecording } = require('./auto-recording');
+const { createVisionReview } = require('./vision-review');
+const { createComparisonSettings } = require('./comparison-config');
 
-function installRecording(window, { onAutoStart = () => {} } = {}) {
+function installRecording(window, { onAutoStart = () => {}, captureCamera = async () => null } = {}) {
   const { app, desktopCapturer, dialog, ipcMain, shell } = require('electron');
   const contents = window.webContents;
   const session = contents.session;
   const uiURL = pathToFileURL(path.join(__dirname, 'ui', 'index.html')).href;
   let current, preparing = false, converting = false, lastResult, lastSaved, closeRequested = false, allowClose = false, closeTimer;
+  const comparisonStore = createComparisonSettings({ filePath: path.join(app.getPath('userData'), 'comparison-settings.json'), capture: captureCamera });
 
   function trusted(event) {
     if (event.sender !== contents || event.senderFrame !== contents.mainFrame || event.senderFrame.url !== uiURL) {
@@ -63,6 +66,8 @@ function installRecording(window, { onAutoStart = () => {} } = {}) {
       if (job.automatic) {
         clearTimeout(closeTimer);
         let result;
+        try { await job.vision?.stop(); }
+        catch (cause) { job.error ||= cause; }
         try {
           const closed = await job.auto?.close(job.error?.message || message);
           const savedPath = closed?.path || job.autoFolder || '';
@@ -137,6 +142,20 @@ function installRecording(window, { onAutoStart = () => {} } = {}) {
   session.setPermissionCheckHandler((sender, permission, _origin, details) => mediaAllowed(sender, permission, details));
   session.setPermissionRequestHandler((sender, permission, callback, details) => callback(mediaAllowed(sender, permission, details)));
 
+  async function comparisonSettings() {
+    const config = (await comparisonStore).get();
+    const identity = await captureCamera({ identityOnly: true });
+    if (config.configured && (!identity || ['key', 'width', 'height'].some(key => identity[key] !== config.source?.[key]))) config.configured = false;
+    return config;
+  }
+  ipcMain.handle('comparison:settings', event => { trusted(event); return comparisonSettings(); });
+  ipcMain.handle('comparison:preview', async event => { trusted(event); return (await comparisonStore).preview(); });
+  ipcMain.handle('comparison:save', async (event, input) => {
+    trusted(event);
+    if (current || preparing || converting) throw new Error('녹화·저장을 끝낸 뒤 AI 비교 설정을 변경하세요.');
+    return (await comparisonStore).save(input);
+  });
+
   ipcMain.handle('recording:prepare', (event, options) => {
     trusted(event);
     if (preparing || converting || current || closeRequested) throw new Error('이미 녹화 중이거나 저장·변환 중입니다.');
@@ -187,6 +206,8 @@ function installRecording(window, { onAutoStart = () => {} } = {}) {
     if (!job.automatic || preparing || job.auto || job.finishing || job.capturePending || closeRequested) throw new Error('자동 녹화를 시작할 수 없습니다.');
     preparing = true;
     try {
+      const config = await comparisonSettings();
+      if (!config.configured) throw new Error('AI 비교 설정에서 현재 카메라의 영상 영역과 통행선을 먼저 저장하세요.');
       const selected = await dialog.showOpenDialog(window, {
         title: '자동 녹화 MP4 저장 폴더 선택', defaultPath: app.getPath('videos'),
         properties: ['openDirectory', 'createDirectory']
@@ -198,7 +219,7 @@ function installRecording(window, { onAutoStart = () => {} } = {}) {
       const folder = selected.filePaths[0];
       if (!(await fs.stat(folder)).isDirectory()) throw new Error('자동 녹화 저장 폴더를 선택하세요.');
       const automatic = await createAutoRecording({
-        folder,
+        folder, mapping: config.mapping,
         onStatus(value) {
           if (current !== job) return;
           if (value.path) lastSaved = { path: value.path, bytes: value.bytes || 1 };
@@ -213,6 +234,26 @@ function installRecording(window, { onAutoStart = () => {} } = {}) {
       }
       job.auto = automatic;
       job.autoFolder = folder;
+      try {
+        job.vision = await createVisionReview({ capture: captureCamera, settings: config,
+          onMotion: value => automatic.onMotion(value),
+          onObservation: value => automatic.onObservation(value),
+          onStatus: value => {
+            if (value.state === 'waiting-camera') progress({ mode: 'auto', state: 'waiting-camera', message: '카메라 영상 대기 · 분석이 중단된 구간은 확인 필요로 보관합니다.' });
+          },
+          onFatal: cause => {
+            automatic.onObservation({ at: Date.now(), healthy: false, uncertain: [cause.message] });
+            automatic.onMotion({ at: Date.now() });
+            automaticError(job, cause);
+          }
+        });
+      } catch (cause) { automaticError(job, cause); throw cause; }
+      if (current !== job || job.finishing || closeRequested || window.isDestroyed()) {
+        await job.vision.stop();
+        if (current === job) await finish(job.id);
+        return { cancelled: true };
+      }
+      job.vision.start();
       lastSaved = { path: folder, bytes: 1 };
       onAutoStart();
       return { id: job.id, folder, preSeconds: 5, postSeconds: 10 };
@@ -221,7 +262,7 @@ function installRecording(window, { onAutoStart = () => {} } = {}) {
   ipcMain.handle('recording:auto-segment', async (event, id, buffer, timing) => {
     trusted(event);
     const job = active(id);
-    if (!job.automatic || !job.auto || job.finishing || job.error) throw new Error(job.error?.message || '자동 녹화가 준비되지 않았습니다.');
+    if (!job.automatic || !job.auto || job.finishing) throw new Error('자동 녹화가 준비되지 않았습니다.');
     if (!(buffer instanceof ArrayBuffer) && !ArrayBuffer.isView(buffer)) throw new Error('잘못된 자동 녹화 데이터입니다.');
     const bytes = buffer instanceof ArrayBuffer ? Buffer.from(buffer) : Buffer.from(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     if (!bytes.length || bytes.length > 8 * 1024 * 1024 || job.queuedBytes + bytes.length > 16 * 1024 * 1024) throw new Error('자동 녹화 저장 속도가 부족합니다.');

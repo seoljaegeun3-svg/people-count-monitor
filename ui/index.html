@@ -39,7 +39,7 @@
       <div class="plc-detail"><span id="plc-status" class="status">연결 대기</span><p id="plc-message">설정을 확인한 후 연결하세요.</p><small id="plc-updated">수신 기록 없음</small></div>
       <button class="primary" id="plc-connect">PLC 연결</button>
     </section>
-    <footer><div class="auto-recording-controls"><button id="record-auto" aria-pressed="false">자동 녹화 켜기</button><span id="record-auto-status" role="status" aria-live="polite">PLC 값 변화 전 5초 · 후 10초 저장</span></div><span>PLC 읽기 전용 · 자동 쓰기 / 리셋 없음</span></footer>
+    <footer><div class="auto-recording-controls"><button id="record-auto" aria-pressed="false">자동 녹화 켜기</button><button id="comparison-settings">AI 비교 설정</button><span id="comparison-status" role="status">설정 필요</span><span id="record-auto-status" role="status" aria-live="polite">영상 인원수와 PLC 비교 · 불일치 / 판단 불확실 구간 저장</span></div><span>PLC 읽기 전용 · 자동 쓰기 / 리셋 없음</span></footer>
   </main>
   <dialog id="settings-dialog">
     <form id="settings-form">
@@ -49,6 +49,25 @@
       <div class="form-grid"><label>PLC IP<input id="settings-host" required></label><label>TCP 포트<input id="settings-port" type="number" min="1" max="65535" required></label><label>메모리 주소<input id="settings-word" pattern="%MW[0-9]{1,6}" required></label><label>갱신 주기 (ms)<input id="settings-interval" type="number" min="500" max="60000" required></label></div>
       <p class="note">LS XGT Ethernet · unsigned 16-bit word<br>카메라 비밀번호는 여기 저장하지 않습니다.</p>
       <p id="settings-error" role="alert"></p><div class="dialog-actions"><button type="button" id="close-settings">취소</button><button class="primary">저장하고 적용</button></div>
+    </form>
+  </dialog>
+  <dialog id="comparison-dialog" aria-labelledby="comparison-heading">
+    <form id="comparison-form">
+      <span class="eyebrow">VIDEO / PLC COMPARISON</span><h2 id="comparison-heading">AI 인원수 비교 설정</h2>
+      <p>영상에서 센 출입 인원과 PLC 변화를 비교합니다. 실제 카메라 영상만 드래그로 선택한 뒤 출입선을 맞추세요. 두 값이 일치한 구간은 지우고, 불일치하거나 판단이 불확실한 구간은 저장합니다.</p>
+      <div class="comparison-preview"><canvas id="comparison-canvas" tabindex="0" aria-label="카메라 영상 영역 선택. 마우스로 드래그하거나 아래 영상 영역 숫자를 입력하세요."></canvas></div>
+      <div class="comparison-selection"><span id="comparison-region-status" role="status">카메라 영상 영역을 선택하세요.</span><button id="comparison-region-reset" type="button">전체 영상 영역</button></div>
+      <fieldset class="comparison-region-fields"><legend>영상 영역 (%) — 숫자로도 조정할 수 있습니다</legend><label>왼쪽<input id="comparison-region-x" type="number" min="0" max="95" step="0.1" value="0"></label><label>위쪽<input id="comparison-region-y" type="number" min="0" max="95" step="0.1" value="0"></label><label>너비<input id="comparison-region-width" type="number" min="5" max="100" step="0.1" value="100"></label><label>높이<input id="comparison-region-height" type="number" min="5" max="100" step="0.1" value="100"></label></fieldset>
+      <div class="form-grid comparison-fields">
+        <label>출입선 방향<select id="comparison-axis"><option value="vertical">세로선 — 좌우 통행</option><option value="horizontal">가로선 — 위아래 통행</option></select></label>
+        <label>출입선 위치 <span id="comparison-line-value">50%</span><input id="comparison-line" type="range" min="10" max="90" step="1" value="50"></label>
+        <label>PLC 값의 의미<select id="comparison-mapping"><option value="unknown">모름 — 모든 통행 구간 보관</option><option value="occupancy">현재 인원 — 입장 +1 / 퇴장 −1</option><option value="total">누적 통행 — 입장·퇴장 모두 +1</option></select></label>
+        <label>감지 민감도<select id="comparison-sensitivity"><option value="low">낮음</option><option value="normal" selected>보통</option><option value="high">높음</option></select></label>
+      </div>
+      <label class="comparison-checkbox"><input id="comparison-invert" type="checkbox">입장 방향 반대로</label>
+      <details class="comparison-advanced"><summary>인식 기준 조정</summary><label>사람 인식 신뢰도 <span id="comparison-confidence-value">45%</span><input id="comparison-confidence" type="range" min="20" max="70" step="5" value="45"></label><p>높이면 사람을 더 엄격하게 구분하지만 멀거나 가려진 사람을 놓칠 수 있습니다. 기본값으로 먼저 확인하세요.</p></details>
+      <p class="note">미리보기는 설정을 열 때의 사진입니다. 카메라의 메뉴·표·시계는 영역에서 제외하세요. AI도 사람을 놓칠 수 있으므로 가림·겹침 등 판단이 불확실한 영상은 보관합니다. 카메라 화면이나 영상 위치를 바꾸면 다시 설정하세요.</p>
+      <p id="comparison-error" role="alert"></p><div class="dialog-actions"><button type="button" id="comparison-cancel">취소</button><button id="comparison-save" class="primary" disabled>영역·출입선 확인 후 저장</button></div>
     </form>
   </dialog>
   <dialog id="camera-auth-dialog">
@@ -65,6 +84,7 @@
   </dialog>
   <div id="toast" role="status" hidden></div>
   <script src="app.js"></script>
+  <script src="comparison-settings.js"></script>
   <script src="recording.js"></script>
 </body>
 </html>

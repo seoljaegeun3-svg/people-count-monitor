@@ -5,12 +5,14 @@
   const convertButton = document.getElementById('record-convert');
   const autoButton = document.getElementById('record-auto');
   const autoStatus = document.getElementById('record-auto-status');
+  const comparisonButton = document.getElementById('comparison-settings');
   const status = document.getElementById('record-status');
   const fileButton = document.getElementById('record-file');
   const api = window.monitor;
   let state = 'idle', mode = 'manual', id, recorder, stream, startedAt, clock, segmentTimer, setupPending = false;
   let writes = Promise.resolve(), pendingBytes = 0, failure = '', writeFailed = false, stopRequested = false, finalizing;
   let autoProgress;
+  const autoHelp = '카메라 사람 수와 PLC 비교 · 불일치·판단 보류 구간만 저장';
 
   function update(next, message) {
     state = next;
@@ -18,6 +20,7 @@
     stopButton.disabled = !['starting', 'recording'].includes(state);
     audioInput.disabled = state !== 'idle';
     convertButton.disabled = state !== 'idle';
+    if (comparisonButton) comparisonButton.disabled = state !== 'idle';
     if (autoButton) {
       autoButton.disabled = !['idle', 'automatic'].includes(state);
       autoButton.setAttribute('aria-pressed', String(state === 'automatic'));
@@ -27,6 +30,12 @@
     status.textContent = message;
   }
   function notify(message) { if (typeof toast === 'function') toast(message); }
+  function autoMessage(progress) {
+    const counts = [];
+    if (Number.isInteger(progress.matched)) counts.push(`일치 ${progress.matched}건`);
+    if (Number.isInteger(progress.saved)) counts.push(`확인용 MP4 ${progress.saved}개`);
+    return [progress.message, ...counts].filter(Boolean).join(' · ');
+  }
   function showResult(result) {
     if (result.bytes > 0) {
       const name = result.path.split(/[\\/]/).pop();
@@ -42,10 +51,12 @@
   }
   function showAutoResult(result) {
     const saved = result.saved || 0;
+    const matched = result.matched || 0;
     if (result.path && fileButton) { fileButton.hidden = false; fileButton.disabled = false; status.title = result.path; }
     const message = result.error || failure;
-    if (autoStatus) autoStatus.textContent = message || (saved ? `MP4 ${saved}개 저장 · 자동 녹화 꺼짐` : '감지된 이동 없음 · 자동 녹화 꺼짐');
-    update('idle', message ? `자동 녹화 종료: ${message}` : `자동 녹화 종료 · MP4 ${saved}개 저장`);
+    const summary = `일치 ${matched}건 · 확인용 MP4 ${saved}개 저장`;
+    if (autoStatus) autoStatus.textContent = message || `${summary} · 자동 녹화 꺼짐`;
+    update('idle', message ? `자동 녹화 종료: ${message}` : `자동 녹화 종료 · ${summary}`);
     if (message) notify(message);
   }
   function elapsed() {
@@ -166,6 +177,16 @@
     status.title = '';
     update('starting', '프로그램 창 녹화 준비 중…');
     try {
+      if (automatic) {
+        const comparison = await api.comparisonSettings();
+        if (stopRequested) { update('idle', '자동 녹화 준비가 취소되었습니다.'); return; }
+        if (!comparison.configured) {
+          mode = 'manual';
+          update('idle', '카메라 비교 영역과 통행 기준을 먼저 설정한 뒤 자동 녹화를 다시 켜세요.');
+          window.dispatchEvent(new Event('open-comparison-settings'));
+          return;
+        }
+      }
       if (!window.MediaRecorder || !navigator.mediaDevices?.getDisplayMedia) throw new Error('이 PC에서 화면 녹화를 사용할 수 없습니다.');
       const prepared = await api.recordingPrepare({ audio: audioInput.checked, ...(automatic ? { automatic: true } : {}) });
       id = prepared.id;
@@ -179,7 +200,7 @@
       if (result.cancelled) {
         for (const track of stream?.getTracks() || []) track.stop();
         stream = null; id = null;
-        if (automatic && autoStatus) autoStatus.textContent = 'PLC 값 변화 전 5초 · 후 10초 저장';
+        if (automatic && autoStatus) autoStatus.textContent = autoHelp;
         update('idle', '녹화가 취소되었습니다.'); return;
       }
       if (stopRequested) { await finish(); return; }
@@ -188,8 +209,8 @@
         startSegment();
         status.title = result.folder || '';
         if (result.folder && fileButton) { fileButton.hidden = false; fileButton.disabled = false; }
-        if (autoStatus) autoStatus.textContent = autoProgress?.message || `PLC 값 변화 전 ${result.preSeconds ?? 5}초 · 후 ${result.postSeconds ?? 10}초 저장`;
-        update('automatic', autoProgress?.message || '자동 녹화 대기 · PLC 값이 바뀌면 MP4 저장');
+        if (autoStatus) autoStatus.textContent = autoProgress ? autoMessage(autoProgress) : autoHelp;
+        update('automatic', autoProgress ? autoMessage(autoProgress) : '카메라와 PLC 비교 대기 · 확인이 필요한 구간만 저장');
         if (autoProgress) status.dataset.autoState = autoProgress.state;
         return;
       }
@@ -214,10 +235,11 @@
   api.onRecordingProgress(progress => {
     if (progress.mode === 'auto' && mode === 'auto') {
       autoProgress = progress;
-      if (autoStatus) autoStatus.textContent = progress.message;
+      const message = autoMessage(progress);
+      if (autoStatus) autoStatus.textContent = message;
       if (progress.path && fileButton) { fileButton.hidden = false; fileButton.disabled = false; status.title = progress.path; }
       if (state === 'automatic') {
-        status.textContent = progress.message;
+        status.textContent = message;
         status.dataset.autoState = progress.state;
       }
       return;
@@ -240,6 +262,9 @@
   fileButton?.addEventListener('click', () => api.recordingReveal().catch(error => notify(error.message)));
   if (fileButton) fileButton.hidden = true;
   audioInput.checked = false;
-  if (autoStatus) autoStatus.textContent = 'PLC 값 변화 전 5초 · 후 10초 저장';
+  window.addEventListener('comparison-settings-changed', () => {
+    if (state === 'idle' && autoStatus) autoStatus.textContent = autoHelp;
+  });
+  if (autoStatus) autoStatus.textContent = autoHelp;
   update('idle', '녹화 안 함 · MP4로 저장');
 })();

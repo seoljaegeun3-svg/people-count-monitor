@@ -4,6 +4,7 @@ let activeBrowserTab = null;
 const dialog = $('settings-dialog');
 const authDialog = $('camera-auth-dialog');
 let authRequest;
+let comparisonDialogOpen = false;
 function toast(message) {
   $('toast').textContent = message;
   $('toast').hidden = false;
@@ -12,13 +13,17 @@ function toast(message) {
 }
 function layout() {
   const bounds = {};
-  if (!dialog.open && !authDialog.open) for (const name of ['camera', 'youtube']) {
+  if (!dialog.open && !authDialog.open && !comparisonDialogOpen) for (const name of ['camera', 'youtube']) {
     if (name === 'youtube' && !activeBrowserTab) continue;
     const b = $(`${name}-space`).getBoundingClientRect();
     bounds[name] = { x: b.x + 1, y: b.y + 1, width: b.width - 2, height: b.height - 2 };
   }
   window.monitor.layout(bounds);
 }
+document.addEventListener('comparison-dialog', event => {
+  comparisonDialogOpen = Boolean(event.detail?.open);
+  layout();
+});
 function updateSettings() {
   $('camera-url').value = settings.camera;
   $('youtube-url').value = settings.youtube;
@@ -102,6 +107,9 @@ authDialog.addEventListener('close', layout);
 window.monitor.onAuth(request => {
   authRequest = request;
   if (dialog.open) dialog.close();
+  const comparisonDialog = $('comparison-dialog');
+  if (comparisonDialog?.open) comparisonDialog.close();
+  comparisonDialogOpen = false;
   $('camera-auth-origin').textContent = `${request.origin} · ${request.scheme} · ${request.realm}`;
   $('camera-auth-password').value = '';
   $('camera-auth-error').textContent = '';

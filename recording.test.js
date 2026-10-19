@@ -15,7 +15,12 @@ async function mainHarness(t) {
   const conversionStarted = new Promise(resolve => { notifyConversion = resolve; });
   const controls = {
     filePath: path.join(folder, 'recording.mp4'), canceled: false, convertCalls: [],
-    sources: [{ id: 'window:88:0', name: 'People Count Monitor' }, { id: 'window:17:0', name: 'own window' }]
+    sources: [{ id: 'window:88:0', name: 'People Count Monitor' }, { id: 'window:17:0', name: 'own window' }],
+    cameraIdentity: { key: 'camera', width: 1280, height: 720 },
+    comparisonConfig: { configured: true, source: { key: 'camera', width: 1280, height: 720 },
+      region: { x: 0, y: 0, width: 1, height: 1 }, sensitivity: 'normal',
+      line: { axis: 'vertical', position: 0.5, invert: false }, mapping: 'occupancy', confidence: 0.35 },
+    lifecycle: [], visionStarts: 0, visionCreations: 0, cameraRequests: []
   };
   const session = {
     setDisplayMediaRequestHandler(handler) { controls.capture = handler; },
@@ -41,7 +46,10 @@ async function mainHarness(t) {
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     dialog: {
       showSaveDialog: async () => ({ canceled: controls.canceled, filePath: controls.filePath }),
-      showOpenDialog: async () => ({ canceled: controls.openCanceled === true, filePaths: controls.openPath ? [controls.openPath] : [] })
+      showOpenDialog: async () => {
+        controls.openDialogCalls = (controls.openDialogCalls || 0) + 1;
+        return { canceled: controls.openCanceled === true, filePaths: controls.openPath ? [controls.openPath] : [] };
+      }
     },
     desktopCapturer: { getSources: async () => controls.sources },
     shell: {
@@ -66,13 +74,18 @@ async function mainHarness(t) {
       controls.autoOptions = options;
       controls.autoSegments = [];
       controls.autoPLC = [];
+      controls.autoMotion = [];
+      controls.autoObservations = [];
       return {
         async segment(buffer, timing) {
           if (controls.autoWriteFailure) throw new Error('fixture auto disk full');
           controls.autoSegments.push({ buffer, timing });
         },
         onPLC(data) { controls.autoPLC.push(data); },
+        onMotion(data) { controls.autoMotion.push(data); },
+        onObservation(data) { controls.autoObservations.push(data); },
         async close(error) {
+          controls.lifecycle.push('auto-close');
           controls.autoCloseError = error;
           if (controls.holdAutoClose) await controls.holdAutoClose;
           return { saved: 0, folder: options.folder, path: options.folder, error: error || '' };
@@ -80,13 +93,58 @@ async function mainHarness(t) {
       };
     }
   };
+  const comparison = {
+    async createComparisonSettings(options) {
+      controls.comparisonStoreOptions = options;
+      return {
+        get: () => structuredClone(controls.comparisonConfig),
+        async preview() {
+          const frame = await options.capture();
+          return { image: frame.image.toDataURL(), key: frame.key, ...frame.image.getSize() };
+        },
+        async save(input) {
+          controls.comparisonConfig = structuredClone(input);
+          return structuredClone(input);
+        }
+      };
+    }
+  };
+  let notifyVisionStop;
+  const visionStopStarted = new Promise(resolve => { notifyVisionStop = resolve; });
+  const vision = {
+    async createVisionReview(options) {
+      controls.visionCreations++;
+      controls.visionOptions = options;
+      if (controls.holdVisionInit) await controls.holdVisionInit;
+      if (controls.visionInitFailure) throw new Error('fixture person model failed');
+      return {
+        start() { controls.visionStarts++; controls.lifecycle.push('vision-start'); },
+        async stop() {
+          controls.lifecycle.push('vision-stop-start');
+          notifyVisionStop();
+          if (controls.holdVisionStop) await controls.holdVisionStop;
+          if (controls.finalObservation) options.onObservation(controls.finalObservation);
+          controls.lifecycle.push('vision-stop-end');
+          if (controls.visionStopFailure) throw new Error('fixture vision cleanup failed');
+        }
+      };
+    }
+  };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, 'recording.js'), 'utf8'), {
-    require: name => name === 'electron' ? electron : name === './mp4' ? conversion : name === './auto-recording' ? automatic : require(name), module, __dirname,
+    require: name => name === 'electron' ? electron : name === './mp4' ? conversion : name === './auto-recording' ? automatic
+      : name === './comparison-config' ? comparison : name === './vision-review' ? vision : require(name), module, __dirname,
     Buffer, ArrayBuffer, process: { platform: 'win32' }, setImmediate,
     setTimeout(callback, milliseconds) { const timer = {}; timers.set(timer, { callback, milliseconds }); return timer; },
     clearTimeout(timer) { timers.delete(timer); }
   });
-  const controller = module.exports.installRecording(window, { onAutoStart() { controls.autoStarted = true; } });
+  async function captureCamera(options = {}) {
+    controls.cameraRequests.push(options);
+    if (options.identityOnly) return { ...controls.cameraIdentity };
+    return { key: controls.cameraIdentity.key, image: { isEmpty: () => false,
+      getSize: () => ({ width: controls.cameraIdentity.width, height: controls.cameraIdentity.height }),
+      toDataURL: () => 'data:image/png;base64,fixture' } };
+  }
+  const controller = module.exports.installRecording(window, { captureCamera, onAutoStart() { controls.autoStarted = true; } });
   const event = { sender: contents, senderFrame: contents.mainFrame };
   const invoke = (name, ...args) => handlers.get(`recording:${name}`)(event, ...args);
   async function capture(frame = contents.mainFrame) {
@@ -99,7 +157,7 @@ async function mainHarness(t) {
     await capture();
     return job;
   }
-  return { controls, contents, window, handlers, timers, invoke, capture, prepare, conversionStarted, controller, folder };
+  return { controls, contents, window, handlers, timers, invoke, capture, prepare, conversionStarted, visionStopStarted, controller, folder };
 }
 
 // Real filesystem writes exercise ordering and protection against data loss;
@@ -278,4 +336,106 @@ test('automatic cancellation and write failure release capture, while closing wa
   await new Promise(setImmediate);
   assert.equal(h.window.destroyed, true);
   assert.match(result.error, /auto disk full/);
+});
+
+test('automatic comparison rejects unconfigured and stale camera calibration before AI or folder selection', async t => {
+  const h = await mainHarness(t);
+  h.controls.openPath = h.folder;
+  const configured = structuredClone(h.controls.comparisonConfig);
+  for (const change of [
+    () => { h.controls.comparisonConfig.configured = false; },
+    () => { h.controls.cameraIdentity.key = 'different-camera'; },
+    () => { h.controls.cameraIdentity.width = 640; },
+    () => { h.controls.cameraIdentity.height = 480; }
+  ]) {
+    h.controls.comparisonConfig = structuredClone(configured);
+    h.controls.cameraIdentity = { ...configured.source };
+    change();
+    const job = await h.prepare({ automatic: true });
+    await assert.rejects(h.invoke('auto-start', { id: job.id }), /AI 비교 설정/);
+    assert.equal(h.controls.visionCreations, 0);
+    assert.equal(h.controls.visionStarts, 0);
+    assert.equal(h.controls.autoOptions, undefined);
+    assert.equal(h.controls.openDialogCalls, undefined);
+    await h.invoke('finish', job.id);
+  }
+});
+
+test('comparison settings IPC rejects remote frames and edits during capture', async t => {
+  const h = await mainHarness(t);
+  const hostile = { sender: h.contents, senderFrame: { url: h.contents.mainFrame.url } };
+  for (const name of ['settings', 'preview', 'save']) {
+    await assert.rejects(async () => h.handlers.get(`comparison:${name}`)(hostile, h.controls.comparisonConfig), /허용되지 않은/);
+  }
+  const trusted = { sender: h.contents, senderFrame: h.contents.mainFrame };
+  assert.equal((await h.handlers.get('comparison:settings')(trusted)).configured, true);
+  assert.equal((await h.handlers.get('comparison:preview')(trusted)).key, 'camera');
+  const job = await h.prepare();
+  await assert.rejects(h.handlers.get('comparison:save')(trusted, h.controls.comparisonConfig), /녹화·저장/);
+  await h.invoke('finish', job.id);
+});
+
+test('independent vision motion and passage observations reach automatic recording without a PLC reading', async t => {
+  const h = await mainHarness(t);
+  h.controls.openPath = h.folder;
+  const job = await h.prepare({ automatic: true });
+  await h.invoke('auto-start', { id: job.id });
+  assert.equal(h.controls.visionStarts, 1);
+  assert.equal(h.controls.autoOptions.mapping, 'occupancy');
+  assert.equal(h.controls.visionOptions.settings.source.key, 'camera');
+  const motion = { at: 1234, changedRatio: 0.2 };
+  const observation = { at: 1400, events: [{ at: 1400, id: 1, direction: 'in' }], uncertain: [], healthy: true };
+  h.controls.visionOptions.onMotion(motion);
+  h.controls.visionOptions.onObservation(observation);
+  assert.deepEqual(h.controls.autoMotion, [motion]);
+  assert.deepEqual(h.controls.autoObservations, [observation]);
+  assert.deepEqual(h.controls.autoPLC, [], 'video activity must not depend on an increment from the PLC');
+  await h.invoke('finish', job.id);
+});
+
+test('automatic finish awaits final vision observation before closing clip storage', { timeout: 5000 }, async t => {
+  const h = await mainHarness(t);
+  h.controls.openPath = h.folder;
+  const job = await h.prepare({ automatic: true });
+  await h.invoke('auto-start', { id: job.id });
+  let release;
+  h.controls.holdVisionStop = new Promise(resolve => { release = resolve; });
+  h.controls.finalObservation = { at: 2000, events: [], uncertain: ['final inference'], healthy: true };
+  const finishing = h.invoke('finish', job.id);
+  await h.visionStopStarted;
+  assert.deepEqual(h.controls.lifecycle, ['vision-start', 'vision-stop-start']);
+  h.controller.onPLC({ state: 'ok', value: 100 });
+  assert.equal(h.controls.autoPLC.length, 0, 'finishing ignores late PLC traffic');
+  release();
+  await finishing;
+  assert.deepEqual(h.controls.lifecycle, ['vision-start', 'vision-stop-start', 'vision-stop-end', 'auto-close']);
+  assert.deepEqual(h.controls.autoObservations, [h.controls.finalObservation]);
+});
+
+test('failed model initialization still finalizes automatic originals and releases the recording slot', async t => {
+  const h = await mainHarness(t);
+  h.controls.openPath = h.folder;
+  h.controls.visionInitFailure = true;
+  const job = await h.prepare({ automatic: true });
+  await assert.rejects(h.invoke('auto-start', { id: job.id }), /person model failed/);
+  assert.equal(h.controls.visionStarts, 0);
+  assert.equal(h.controls.autoStarted, undefined);
+  assert.equal(h.controls.lastMessage, 'recording:stop');
+  const result = await h.invoke('finish', job.id);
+  assert.match(result.error, /person model failed/);
+  assert.deepEqual(h.controls.lifecycle, ['auto-close']);
+  const manual = await h.prepare();
+  await h.invoke('finish', manual.id);
+});
+
+test('vision cleanup failure still asks automatic storage to preserve and finalize collected clips', async t => {
+  const h = await mainHarness(t);
+  h.controls.openPath = h.folder;
+  const job = await h.prepare({ automatic: true });
+  await h.invoke('auto-start', { id: job.id });
+  h.controls.visionStopFailure = true;
+  const result = await h.invoke('finish', job.id);
+  assert.ok(h.controls.lifecycle.includes('auto-close'), 'vision cleanup errors must not bypass saving collected segments');
+  assert.match(h.controls.autoCloseError, /vision cleanup failed/);
+  assert.match(result.error, /vision cleanup failed/);
 });

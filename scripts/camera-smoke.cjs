@@ -287,7 +287,7 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
       context.fillStyle = window.fixtureColor; context.fillRect(0,0,canvas.width,canvas.height);
       context.fillStyle = 'white'; context.font = '24px sans-serif'; context.fillText('Live frame ' + frame++,20,40);
     };
-    render(); setInterval(render,33); return true;
+    render(); window.fixtureRenderTimer = setInterval(render,33); return true;
   })()`)));
   const paintRecordedPages = async (color, blue) => {
     await Promise.all(recordedPages.map(contents => contents.executeJavaScript(`window.fixtureColor = ${JSON.stringify(color)}; true;`)));
@@ -315,7 +315,7 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
   await until(() => ui("document.getElementById('record-status').dataset.state === 'idle' && document.getElementById('record-status').textContent.includes('저장 완료')"), 'MP4 recording finalizes', 30000);
   assert(fs.existsSync(recordingPath) && fs.statSync(recordingPath).size > 1024, 'recorded MP4 is written');
   assert.equal(await ui("document.getElementById('record-stop').disabled"), true);
-  const verifyMP4 = async (filePath, { minimumDuration = 1, maximumDuration = Infinity, firstFraction = .25, lastFraction = .75, label = 'own-window recording' } = {}) => {
+  const verifyMP4 = async (filePath, { minimumDuration = 1, maximumDuration = Infinity, firstFraction = .25, lastFraction = .75, verifyColors = true, label = 'own-window recording' } = {}) => {
     const recording = fs.readFileSync(filePath);
     assert.equal(recording.subarray(4, 8).toString('ascii'), 'ftyp', 'recording is an MP4 container');
     assert(recording.includes(Buffer.from('avc1')), 'MP4 contains an H.264 video track');
@@ -355,21 +355,65 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
     const earlier = await seekFrame(firstFraction);
     for (const [label, frame] of [['forward', later], ['backward', earlier]]) {
       assert(Math.abs(frame.time-frame.target) < .15 && frame.ready >= 2, `${label} timeline seek resolves to a decoded frame`);
-      for (const panel of ['camera', 'browser']) {
+      for (const panel of verifyColors ? ['camera', 'browser'] : []) {
         const [red, , blue] = frame[panel];
         assert(label === 'forward' ? blue > 150 && blue > red+80 : red > 150 && red > blue+80,
           `${label} seek must show the corresponding ${panel} native view frame, RGB=${frame[panel]}`);
       }
     }
-    console.log(`PASS: ${label} saved as H.264 fast-start MP4 with finite duration and working forward/backward seeks to camera/browser frames (${recording.length} bytes, ${dimensions.width}×${dimensions.height}, ${dimensions.duration.toFixed(2)}s)`);
+    console.log(`PASS: ${label} saved as H.264 fast-start MP4 with finite duration and working forward/backward seeks${verifyColors ? ' to camera/browser frames' : ''} (${recording.length} bytes, ${dimensions.width}×${dimensions.height}, ${dimensions.duration.toFixed(2)}s)`);
     return dimensions;
     } finally { playback.destroy(); }
   };
   await verifyMP4(recordingPath);
 
-  // A real local XGT peer exercises the production PLC poller and count-change
-  // hook. Keep the normal five-second pre-roll and ten-second post-roll here.
-  await paintRecordedPages('rgb(232,64,64)', false);
+  // Render a known CC0 person in the actual camera WebContentsView. The model
+  // sees captured pixels from this page; no detections or crossings are mocked.
+  const personFixture = require('./person-fixture.cjs');
+  const personImage = `data:image/png;base64,${fs.readFileSync(personFixture.fixturePath).toString('base64')}`;
+  await camera.executeJavaScript(`(async () => {
+    clearInterval(window.fixtureRenderTimer);
+    const image = new Image(); image.src = ${JSON.stringify(personImage)}; await image.decode();
+    const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 360;
+    canvas.style.cssText = 'position:fixed;left:0;top:0;width:640px;height:360px';
+    document.body.style.background = 'rgb(20,25,30)'; document.body.replaceChildren(canvas);
+    const context = canvas.getContext('2d');
+    window.drawFixturePerson = centerX => {
+      context.fillStyle = 'rgb(20,25,30)'; context.fillRect(0,0,640,360);
+      context.drawImage(image,4,64,320,448,Math.round(centerX*640-60),90,120,180);
+    };
+    window.drawFixturePerson(.2); return true;
+  })()`);
+  // Exercise the same preview/calibration form used by the operator. Its source
+  // key is trusted main-process state, rather than a value supplied by a test.
+  await ui("document.getElementById('comparison-settings').click(); true;");
+  await until(() => ui("document.getElementById('comparison-dialog').open"), 'camera comparison preview opens');
+  const previewSize = await ui("({width:document.getElementById('comparison-canvas').width,height:document.getElementById('comparison-canvas').height})");
+  assert(previewSize.width >= 640 && previewSize.height >= 360, 'camera preview contains the whole fixture video area');
+  await ui(`(() => {
+    const fields = { 'comparison-region-x':0, 'comparison-region-y':0,
+      'comparison-region-width':${640 / previewSize.width * 100},
+      'comparison-region-height':${360 / previewSize.height * 100},
+      'comparison-axis':'vertical', 'comparison-line':50, 'comparison-mapping':'occupancy',
+      'comparison-confidence':45, 'comparison-sensitivity':'normal' };
+    for (const [id, value] of Object.entries(fields)) {
+      const field = document.getElementById(id); field.value = String(value);
+      field.dispatchEvent(new Event('input', {bubbles:true}));
+    }
+    document.getElementById('comparison-invert').checked = false;
+    document.getElementById('comparison-form').requestSubmit(); return true;
+  })()`);
+  await until(() => ui("!document.getElementById('comparison-dialog').open && document.getElementById('comparison-status').dataset.configured === 'true'"), 'comparison video area and passage line save');
+  const comparison = await ui('window.monitor.comparisonSettings()');
+  assert.equal(comparison.mapping, 'occupancy');
+  assert.equal(comparison.line.axis, 'vertical');
+  assert.equal(comparison.line.position, .5);
+  assert(comparison.source?.key, 'saved comparison is bound to the captured camera source');
+  console.log('PASS: actual camera preview, video-area calibration, passage direction, occupancy mapping, and trusted source key');
+
+  // A real XGT peer keeps its count unchanged while the person crosses the
+  // camera line. The camera must initiate a clip even when the PLC misses it.
+  // Keep the normal five-second pre-roll and ten-second post-roll here.
   await ui("window.fixtureAutoProgress = []; window.monitor.onRecordingProgress(progress => window.fixtureAutoProgress.push(progress)); true;");
   await clickWithGesture('#record-auto');
   await until(() => ui("document.getElementById('record-auto').getAttribute('aria-pressed') === 'true'"), 'automatic recording is armed').catch(async error => {
@@ -379,24 +423,33 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
   await new Promise(resolve => setTimeout(resolve, 7000));
   assert(plcReads.length >= 5, 'automatic recording receives live PLC baseline samples');
   const mp4Files = () => fs.readdirSync(automaticFolder).filter(name => name.endsWith('.mp4'));
+  const reviews = () => fs.readdirSync(automaticFolder).filter(name => name.endsWith('.jsonl')).flatMap(name =>
+    fs.readFileSync(path.join(automaticFolder, name), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)));
   assert.equal(mp4Files().length, 0, 'first PLC sample and unchanged values must not create clips');
   assert.equal(await ui("document.getElementById('record-start').disabled"), true, 'manual recording cannot compete with the rolling capture');
-  const firstEventAt = Date.now();
-  plcValue = 42;
-  await until(() => ui("document.getElementById('plc-value').textContent === '42'"), 'entry count change reaches the UI');
-  await paintRecordedPages('rgb(64,96,232)', true);
-  await new Promise(resolve => setTimeout(resolve, 4300));
-  plcValue = 41;
-  await until(() => ui("document.getElementById('plc-value').textContent === '41'"), 'exit count change reaches the UI');
-  const lastEventAt = Date.now();
-  await new Promise(resolve => setTimeout(resolve, Math.max(0, firstEventAt + 11200 - Date.now())));
-  assert.equal(mp4Files().length, 0, 'exit extends the active clip beyond the first event post-roll');
-  await until(() => mp4Files().length === 1, 'entry and exit produce one merged event MP4', 18000);
+  const crossingAt = Date.now();
+  for (const x of [.3, .4, .5, .6, .7, .8]) {
+    await camera.executeJavaScript(`window.drawFixturePerson(${x}); true;`);
+    await new Promise(resolve => setTimeout(resolve, 650));
+  }
+  const lastMotionAt = Date.now();
+  assert.equal(plcValue, 41, 'the PLC fixture deliberately misses the video passage');
+  assert(plcReads.filter(sample => sample.at >= crossingAt).every(sample => sample.value === 41), 'all PLC polls remain unchanged during the camera crossing');
+  await until(() => mp4Files().length === 1, 'camera-only passage produces a retained review MP4', 40000);
   await until(() => ui("window.fixtureAutoProgress.some(progress => progress.saved >= 1)"), 'automatic clip finalization reported', 15000);
-  assert(Date.now() - lastEventAt >= 9500, 'the merged clip includes the post-roll after the last change');
+  await until(() => reviews().length === 1, 'video/PLC comparison JSONL is synced');
+  const missed = reviews()[0];
+  assert(['mismatch', 'uncertain'].includes(missed.status), 'a PLC-missed passage cannot be discarded as matched');
+  assert.equal(missed.videoIn, 1, 'the real person detector and tracker count the camera line crossing');
+  assert.equal(missed.videoOut, 0);
+  assert.equal(missed.plcIn, 0);
+  assert.equal(missed.plcOut, 0);
+  assert.equal(path.resolve(missed.video), path.join(automaticFolder, mp4Files()[0]), 'JSONL links to the retained MP4');
+  assert.equal(missed.model, 'YOLOX-tiny');
+  assert(Date.now() - lastMotionAt >= 9000, 'the clip includes the post-roll after the camera movement');
   assert.equal(await ui("document.getElementById('record-auto').getAttribute('aria-pressed')"), 'true', 'saving a clip leaves automatic recording armed');
-  await verifyMP4(path.join(automaticFolder, mp4Files()[0]), { minimumDuration: 15, maximumDuration: 30, firstFraction: .1, label: 'PLC entry/exit merged automatic clip with pre-roll and post-roll' });
-  console.log('PASS: initial PLC baseline ignored, unchanged values omitted, increment/decrement trigger and extend one event clip');
+  await verifyMP4(path.join(automaticFolder, mp4Files()[0]), { minimumDuration: 14, maximumDuration: 35, firstFraction: .1, verifyColors: false, label: 'camera-triggered PLC-missed person review clip with pre-roll and post-roll' });
+  console.log(`PASS: real person inference counts one entry independently of constant PLC=41, retains ${missed.status} MP4, and writes its comparison JSONL`);
 
   // Turning OFF must flush and release capture so ordinary manual recording can
   // start immediately, without retaining continuous video files in the folder.
@@ -407,6 +460,37 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
   plcValue = 42;
   await new Promise(resolve => setTimeout(resolve, 1000));
   assert.equal(mp4Files().length, savedClipCount, 'PLC changes while OFF do not make clips');
+
+  // The complementary healthy case must keep only the small audit record.
+  // Reset position while OFF so a synthetic return movement is never counted.
+  await camera.executeJavaScript('window.drawFixturePerson(.2); true;');
+  plcValue = 41;
+  await ui('window.fixtureAutoProgress = []; true;');
+  await clickWithGesture('#record-auto');
+  await until(() => ui("document.getElementById('record-auto').getAttribute('aria-pressed') === 'true'"), 'comparison re-arms after OFF');
+  await until(() => ui("document.getElementById('plc-value').textContent === '41'"), 'healthy comparison baseline');
+  await new Promise(resolve => setTimeout(resolve, 7000));
+  for (const x of [.3, .4, .5, .6, .7, .8]) {
+    await camera.executeJavaScript(`window.drawFixturePerson(${x}); true;`);
+    if (x === .6) plcValue = 42;
+    await new Promise(resolve => setTimeout(resolve, 650));
+  }
+  await until(() => reviews().length === 2, 'healthy video/PLC comparison writes an audit record', 35000);
+  await until(() => ui('window.fixtureAutoProgress.some(progress => progress.matched >= 1)'), 'matched comparison reported');
+  const healthy = reviews().find(review => review.start > missed.end);
+  assert(healthy, 'the healthy review belongs to the newly armed comparison session');
+  assert.equal(healthy.status, 'matched', `healthy comparison must agree: ${JSON.stringify(healthy)}`);
+  assert.equal(healthy.videoIn, 1);
+  assert.equal(healthy.videoOut, 0);
+  assert.equal(healthy.plcIn, 1);
+  assert.equal(healthy.plcOut, 0);
+  assert.equal(healthy.video, null, 'a healthy match keeps no permanent video');
+  assert.deepEqual(healthy.reasons, []);
+  assert.equal(mp4Files().length, savedClipCount, 'matching video and PLC counts do not create an additional MP4');
+  await ui("document.getElementById('record-auto').click(); true;");
+  await until(() => ui("document.getElementById('record-status').dataset.state === 'idle' && document.getElementById('record-auto').getAttribute('aria-pressed') === 'false'"), 'matched automatic session releases capture', 15000);
+  console.log('PASS: real person crossing plus one healthy PLC increment is matched in JSONL without retaining another MP4');
+
   const recoveryPath = path.join(profile, 'manual-after-automatic.mp4');
   dialog.showSaveDialog = async () => ({ canceled: false, filePath: recoveryPath });
   await clickWithGesture('#record-start');
@@ -416,7 +500,7 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
   await until(() => ui("document.getElementById('record-status').dataset.state === 'idle' && document.getElementById('record-status').textContent.includes('저장 완료')"), 'manual recording after auto finalizes', 30000);
   assert(fs.existsSync(recoveryPath) && fs.statSync(recoveryPath).size > 1024, 'manual capture still writes a new MP4 after auto is disabled');
   assert.equal(fs.readFileSync(recoveryPath).subarray(4, 8).toString('ascii'), 'ftyp');
-  assert.equal(fs.readdirSync(automaticFolder).filter(name => !name.endsWith('.mp4')).length, 0, 'temporary rolling segments are removed when automatic recording is OFF');
+  assert.equal(fs.readdirSync(automaticFolder).filter(name => !name.endsWith('.mp4') && !name.endsWith('.jsonl')).length, 0, 'temporary rolling segments are removed when automatic recording is OFF');
   console.log('PASS: automatic OFF removes the rolling buffer, ignores subsequent PLC changes, and allows a fresh manual MP4 recording');
 })().then(() => {
   clearTimeout(timeout); server.closeAllConnections(); foreign.closeAllConnections(); server.close(); foreign.close(); for (const socket of plcSockets) socket.destroy(); plcServer.close(); app.exit(0);

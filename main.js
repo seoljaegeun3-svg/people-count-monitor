@@ -1,7 +1,7 @@
 const { app, BrowserWindow, WebContentsView, ipcMain, screen } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { validatePLC, readWord } = require('./plc');
 const { resolveWebInput, safeWebURL } = require('./web-url');
 const { installRecording } = require('./recording');
@@ -14,6 +14,7 @@ let enabled = false, generation = 0;
 const peopleCountingPath = '/home/setup/opensdk/html/WiseAI/index.html#/statistics/setup/PEOPLE_COUNTING';
 const legacyCameraURL = `http://192.168.1.100${peopleCountingPath}`;
 let cameraOrigin, cameraAuth;
+let cameraReady = false, cameraVisible = false, cameraGeometry, cameraSnapshotIdentity;
 const defaults = {
   camera: 'http://192.168.1.100/',
   youtube: 'https://www.youtube.com/',
@@ -35,6 +36,7 @@ function tabsSnapshot() {
   return { tabs: browserTabs.map(({ id, title, url, state, message }) => ({ id, title, url, state, message })), activeId: activeTabId };
 }
 function emitPage(name, tabId, data) {
+  if (name === 'camera' && data.state) cameraReady = data.state === 'ready';
   if (tabId) {
     const tab = browserTabs.find(item => item.id === tabId);
     if (!tab) return;
@@ -50,14 +52,32 @@ function applyLayout() {
   const place = (view, bounds) => {
     if (!view || view.webContents.isDestroyed()) return;
     if (!bounds || !['x', 'y', 'width', 'height'].every(key => Number.isFinite(bounds[key]))) {
+      if (view === panels.camera) cameraVisible = false;
       view.setVisible(false); view.setBounds({ x: 0, y: 0, width: 0, height: 0 }); return;
     }
     const x = Math.max(0, Math.min(width, Math.round(bounds.x))), y = Math.max(0, Math.min(height, Math.round(bounds.y)));
-    view.setBounds({ x, y, width: Math.max(0, Math.min(width - x, Math.round(bounds.width))), height: Math.max(0, Math.min(height - y, Math.round(bounds.height))) });
+    const placed = { x, y, width: Math.max(0, Math.min(width - x, Math.round(bounds.width))), height: Math.max(0, Math.min(height - y, Math.round(bounds.height))) };
+    view.setBounds(placed);
+    if (view === panels.camera) { cameraVisible = placed.width > 0 && placed.height > 0; if (cameraVisible) cameraGeometry = placed; }
     view.setVisible(true);
   };
   place(panels.camera, lastBounds.camera);
   for (const tab of browserTabs) place(tab.view, tab.id === activeTabId ? lastBounds.youtube : null);
+}
+async function captureCamera({ identityOnly = false } = {}) {
+  const view = panels?.camera, contents = view?.webContents;
+  if (!contents || contents.isDestroyed() || !cameraReady || !cameraGeometry) return null;
+  const identity = () => ({
+    key: createHash('sha256').update(JSON.stringify([contents.getURL(), cameraGeometry.width, cameraGeometry.height, contents.getZoomFactor()])).digest('hex'),
+    width: cameraGeometry.width, height: cameraGeometry.height
+  });
+  const before = identity();
+  if (identityOnly) return cameraSnapshotIdentity?.key === before.key ? { ...cameraSnapshotIdentity } : before;
+  if (!cameraVisible || window.isMinimized()) return null;
+  const image = await contents.capturePage();
+  if (!cameraReady || !cameraVisible || contents.isDestroyed() || before.key !== identity().key || image.isEmpty()) return null;
+  cameraSnapshotIdentity = { key: before.key, ...image.getSize() };
+  return { ...cameraSnapshotIdentity, image };
 }
 function cancelCameraAuth() {
   if (!cameraAuth) return;
@@ -100,7 +120,7 @@ app.whenReady().then(async () => {
   const workArea = screen.getPrimaryDisplay().workAreaSize;
   window = new BrowserWindow({ width: Math.min(1600, workArea.width), height: Math.min(1000, workArea.height), minWidth: 860, minHeight: 500, resizable: true, backgroundColor: '#0b1120', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-  recordingController = installRecording(window, { onAutoStart: () => setConnection(true) });
+  recordingController = installRecording(window, { onAutoStart: () => setConnection(true), captureCamera });
   panels = {};
   const createPanel = (name, tabId = null) => {
     const view = new WebContentsView({ webPreferences: { partition: `persist:${name}`, nodeIntegration: false, contextIsolation: true, sandbox: true } });

@@ -22,6 +22,35 @@ async function verify(resources) {
   }
   assert.ok((await fs.readFile(`${logicalBinary}.README`, 'utf8')).trim(), 'Include the binary build/source README.');
 
+  const model = require(path.join(appRoot, 'models', 'manifest.json'));
+  const { createPersonDetector } = require(path.join(appRoot, 'person-detector.js'));
+  assert.equal(typeof createPersonDetector, 'function', 'Package the real person detector.');
+  for (const [filename, text] of [
+    ['LICENSE-YOLOX.txt', /Apache License/],
+    ['LICENSE-ONNXRUNTIME.txt', /MIT License/],
+    ['ONNXRUNTIME-ThirdPartyNotices.txt', /Copyright/]
+  ]) {
+    assert.match(await fs.readFile(path.join(appRoot, 'models', filename), 'utf8'), text,
+      `Include the bundled AI component license: ${filename}`);
+  }
+  // Creating the real session verifies the packaged model's exact checksum and
+  // makes Electron load the unpacked ONNX Runtime native addon and CPU library.
+  const detector = await createPersonDetector();
+  try {
+    const result = await detector.detect({
+      data: Buffer.alloc(416 * 416 * 4, 114), width: 416, height: 416, format: 'rgba'
+    });
+    assert.deepEqual(result.detections, [], 'The packaged CPU detector must reject an empty scene.');
+    assert.deepEqual(result.weakDetections, [], 'An empty scene must not produce weak person detections.');
+    assert.ok(result.elapsedMs > 0 && Number.isFinite(result.elapsedMs), 'Run actual native inference.');
+    console.log(`Packaged person detector check passed: ${JSON.stringify({
+      electron: process.versions.electron,
+      runtime: require(path.join(appRoot, 'node_modules', 'onnxruntime-node', 'package.json')).version,
+      provider: 'cpu', model: model.file, sha256: model.sha256,
+      detections: result.detections.length, elapsedMs: Math.round(result.elapsedMs)
+    })}`);
+  } finally { await detector.close(); }
+
   const { convertToMP4, concatToMP4 } = require(path.join(appRoot, 'mp4.js'));
   assert.equal(typeof convertToMP4, 'function', 'Package the real MP4 conversion helper.');
   assert.equal(typeof require(path.join(appRoot, 'auto-recording.js')).createAutoRecording, 'function', 'Package the automatic recording controller.');
