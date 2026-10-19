@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('monitor', {
   recordingChunk: (id, chunk) => ipcRenderer.invoke('recording:chunk', id, chunk),
   recordingFinish: (id, error) => ipcRenderer.invoke('recording:finish', id, error),
   recordingCancel: id => ipcRenderer.invoke('recording:cancel', id),
+  recordingConvert: () => ipcRenderer.invoke('recording:convert'),
   recordingReveal: () => ipcRenderer.invoke('recording:reveal'),
+  onRecordingProgress: callback => ipcRenderer.on('recording:progress', (_event, data) => callback(data)),
   onRecordingStop: callback => ipcRenderer.on('recording:stop', () => callback())
 });

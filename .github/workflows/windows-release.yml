@@ -21,6 +21,7 @@ jobs:
       - run: npm test
       - run: npm run test:camera
       - run: npm run dist:win -- --config.win.signAndEditExecutable=false
+      - run: npm run test:packaged
       - name: Upload Windows executable and publish download
         shell: pwsh
         env:
@@ -31,7 +32,7 @@ jobs:
           $tag = "v$version"
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --draft --target $env:GITHUB_SHA --title "People Count Monitor $version" --notes "프로그램 창 전체 WebM 녹화, 선택형 PC 소리 녹음, 웹 탭 추가·삭제, 웹 창 닫기·재추가, 좌우·위아래 비율과 창 높이 조절 지원. Windows에서 카메라·웹 탭·배치 및 실제 녹화 파일 재생 테스트를 통과한 빌드입니다. 아래 Assets에서 EXE를 다운로드하세요."
+            gh release create $tag --draft --target $env:GITHUB_SHA --title "People Count Monitor $version" --notes "녹화 파일을 시간 이동이 가능한 MP4(H.264/AAC)로 저장합니다. 중지 후 MP4 저장 완료를 기다리세요. 기존 WebM 파일은 상단 MP4 변환 버튼으로 바꿀 수 있으며 원본은 유지합니다. Windows에서 실제 화면 녹화·MP4 앞뒤 탐색과 배포본 내장 변환기를 검증한 빌드입니다. 아래 Assets에서 EXE를 다운로드하세요."
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
           gh release upload $tag "dist/People-Count-Monitor-$version.exe" --clobber

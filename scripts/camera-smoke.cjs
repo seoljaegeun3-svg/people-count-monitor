@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'people-count-auth-'));
 app.setPath('userData', profile);
-const recordingPath = path.join(profile, 'fixture-recording.webm');
+const recordingPath = path.join(profile, 'fixture-recording.mp4');
 dialog.showSaveDialog = async () => ({ canceled: false, filePath: recordingPath });
 const username = 'fixture-user', password = 'fixture-password';
 const md5 = value => crypto.createHash('md5').update(value).digest('hex');
@@ -32,8 +32,8 @@ const server = http.createServer((req, res) => {
 });
 const foreign = http.createServer((_req, res) => { foreignRequests++; res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Other device"' }); res.end('Other origin'); });
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-async function until(check, message) {
-  const deadline = Date.now() + 12000;
+async function until(check, message, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs;
   let lastError;
   while (Date.now() < deadline) {
     try { if (await check()) return; } catch (error) { lastError = error; /* Renderer may be navigating. */ }
@@ -230,6 +230,38 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
   nativeBoundsFit();
   console.log('PASS: close active and last tab, destroy native content, full-width camera, reopen browser without orphan views');
 
+  const recordedBrowser = browserViews().find(view => view.getVisible()).webContents;
+  const recordedPages = [camera, recordedBrowser];
+  // Keep both native views moving, like a live camera/video. Static desktop
+  // capture can omit unchanged tail frames and defer an unfocused view's paint.
+  await Promise.all(recordedPages.map(contents => contents.executeJavaScript(`(() => {
+    const canvas = document.createElement('canvas');
+    canvas.style.cssText = 'position:fixed;inset:0;width:100%;height:100%';
+    document.body.replaceChildren(canvas);
+    const context = canvas.getContext('2d');
+    window.fixtureColor = 'rgb(232,64,64)';
+    let frame = 0;
+    const render = () => {
+      if (canvas.width !== innerWidth || canvas.height !== innerHeight) { canvas.width = innerWidth; canvas.height = innerHeight; }
+      context.fillStyle = window.fixtureColor; context.fillRect(0,0,canvas.width,canvas.height);
+      context.fillStyle = 'white'; context.font = '24px sans-serif'; context.fillText('Live frame ' + frame++,20,40);
+    };
+    render(); setInterval(render,33); return true;
+  })()`)));
+  const paintRecordedPages = async (color, blue) => {
+    await Promise.all(recordedPages.map(contents => contents.executeJavaScript(`window.fixtureColor = ${JSON.stringify(color)}; true;`)));
+    await until(async () => {
+      for (const contents of recordedPages) {
+        const image = await contents.capturePage();
+        const { width, height } = image.getSize();
+        const pixels = image.toBitmap(), offset = (Math.floor(height/2)*width+Math.floor(width/2))*4;
+        const red = pixels[offset+2], blueChannel = pixels[offset];
+        assert(blue ? blueChannel > red+80 : red > blueChannel+80, 'native fixture compositor must paint the requested color');
+      }
+      return true;
+    }, 'native camera and browser fixture color is painted');
+  };
+  await paintRecordedPages('rgb(232,64,64)', false);
   const recordButton = await ui("document.getElementById('record-audio').checked = false; (() => { const b = document.getElementById('record-start').getBoundingClientRect(); return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)}; })()");
   win.focus();
   win.webContents.focus();
@@ -238,44 +270,58 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
   await until(() => ui("document.getElementById('record-status').dataset.state === 'recording'"), 'own-window recording starts').catch(async error => {
     throw new Error(`${error.message}: ${await ui("document.getElementById('record-status').textContent")}`);
   });
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  await new Promise(resolve => setTimeout(resolve, 1300));
+  await paintRecordedPages('rgb(64,96,232)', true);
+  await new Promise(resolve => setTimeout(resolve, 1700));
   await ui("document.getElementById('record-stop').click(); true;");
-  await until(() => fs.existsSync(recordingPath) && fs.statSync(recordingPath).size > 1024, 'recorded video is written');
-  await until(() => ui("document.getElementById('record-status').dataset.state === 'idle' && document.getElementById('record-status').textContent.includes('저장 완료')"), 'recording finalizes');
+  await until(() => ui("document.getElementById('record-status').dataset.state === 'idle' && document.getElementById('record-status').textContent.includes('저장 완료')"), 'MP4 recording finalizes', 30000);
+  assert(fs.existsSync(recordingPath) && fs.statSync(recordingPath).size > 1024, 'recorded MP4 is written');
   const recording = fs.readFileSync(recordingPath);
-  assert.equal(recording.subarray(0, 4).toString('hex'), '1a45dfa3', 'recording is a WebM container');
-  assert(recording.includes(Buffer.from('V_VP')), 'recording contains a video track');
+  assert.equal(recording.subarray(4, 8).toString('ascii'), 'ftyp', 'recording is an MP4 container');
+  assert(recording.includes(Buffer.from('avc1')), 'MP4 contains an H.264 video track');
+  const metadataAt = recording.indexOf(Buffer.from('moov')), mediaAt = recording.indexOf(Buffer.from('mdat'));
+  assert(metadataAt > 0 && mediaAt > metadataAt, 'MP4 metadata precedes media for fast seeking');
   assert.equal(await ui("document.getElementById('record-stop').disabled"), true);
   const playbackPath = path.join(profile, 'recording-playback.html');
-  fs.writeFileSync(playbackPath, '<!doctype html><video src="fixture-recording.webm" muted preload="auto"></video>');
+  fs.writeFileSync(playbackPath, '<!doctype html><video src="fixture-recording.mp4" muted preload="auto"></video>');
   const playback = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false } });
   try {
     await playback.loadFile(playbackPath);
     await until(() => playback.webContents.executeJavaScript("document.querySelector('video').readyState >= 2 && document.querySelector('video').videoWidth > 0"), 'saved recording decodes in Chromium');
-    const dimensions = await playback.webContents.executeJavaScript("({width:document.querySelector('video').videoWidth,height:document.querySelector('video').videoHeight})");
+    const dimensions = await playback.webContents.executeJavaScript("({width:document.querySelector('video').videoWidth,height:document.querySelector('video').videoHeight,duration:document.querySelector('video').duration})");
     assert(dimensions.width > 0 && dimensions.height > 0);
-    await playback.webContents.executeJavaScript("document.querySelector('video').play().then(() => true)");
-    await until(async () => {
-      const frame = await playback.webContents.executeJavaScript(`(() => {
+    assert(Number.isFinite(dimensions.duration) && dimensions.duration > 1, 'MP4 has a finite duration for timeline seeking');
+    const seekFrame = fraction => playback.webContents.executeJavaScript(`new Promise((resolve, reject) => {
         const video = document.querySelector('video');
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-        const context = canvas.getContext('2d');
-        context.drawImage(video, 0, 0);
-        const sample = x => {
-          const data = context.getImageData(Math.round(canvas.width*x)-2, Math.round(canvas.height*.5)-2, 5, 5).data;
-          let brightness = 0;
-          for (let i = 0; i < data.length; i += 4) brightness += (data[i]+data[i+1]+data[i+2])/3;
-          return Math.round(brightness/25);
+        const target = video.duration * ${fraction};
+        const timer = setTimeout(() => reject(new Error('MP4 seek timed out at ' + target)), 7000);
+        video.onseeked = () => {
+          clearTimeout(timer);
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+          const context = canvas.getContext('2d');
+          context.drawImage(video, 0, 0);
+          const sample = x => {
+            const data = context.getImageData(Math.round(canvas.width*x)-2, Math.round(canvas.height*.5)-2, 5, 5).data;
+            const rgb = [0,0,0];
+            for (let i = 0; i < data.length; i += 4) for (let channel = 0; channel < 3; channel++) rgb[channel] += data[i+channel]/25;
+            return rgb.map(Math.round);
+          };
+          resolve({target,time:video.currentTime,ready:video.readyState,camera:sample(.25),browser:sample(.8)});
         };
-        return {time:video.currentTime,camera:sample(.25),browser:sample(.8)};
-      })()`);
-      assert(frame.time >= .3, 'allow the capture to warm up');
-      assert(frame.camera > 180, `recording must contain the white native camera page, brightness=${frame.camera}`);
-      assert(frame.browser > 180, `recording must contain the white native browser page, brightness=${frame.browser}`);
-      return true;
-    }, 'recorded frame contains camera and browser native views');
-    console.log(`PASS: own-window recording starts and stops, WebM saved and decoded with camera/browser pixels (${recording.length} bytes, ${dimensions.width}×${dimensions.height})`);
+        video.currentTime = target;
+      })`);
+    const later = await seekFrame(.75);
+    const earlier = await seekFrame(.25);
+    for (const [label, frame] of [['forward', later], ['backward', earlier]]) {
+      assert(Math.abs(frame.time-frame.target) < .15 && frame.ready >= 2, `${label} timeline seek resolves to a decoded frame`);
+      for (const panel of ['camera', 'browser']) {
+        const [red, , blue] = frame[panel];
+        assert(label === 'forward' ? blue > 150 && blue > red+80 : red > 150 && red > blue+80,
+          `${label} seek must show the corresponding ${panel} native view frame, RGB=${frame[panel]}`);
+      }
+    }
+    console.log(`PASS: own-window recording saved as H.264 fast-start MP4 with finite duration and working forward/backward seeks to camera/browser frames (${recording.length} bytes, ${dimensions.width}×${dimensions.height}, ${dimensions.duration.toFixed(2)}s)`);
   } finally { playback.destroy(); }
 })().then(() => {
   clearTimeout(timeout); server.closeAllConnections(); foreign.closeAllConnections(); server.close(); foreign.close(); app.exit(0);

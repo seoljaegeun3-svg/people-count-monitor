@@ -12,7 +12,7 @@ async function mainHarness(t) {
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
   const handlers = new Map(), timers = new Map();
   const controls = {
-    filePath: path.join(folder, 'recording.webm'), canceled: false,
+    filePath: path.join(folder, 'recording.mp4'), canceled: false, convertCalls: [],
     sources: [{ id: 'window:88:0', name: 'People Count Monitor' }, { id: 'window:17:0', name: 'own window' }]
   };
   const session = {
@@ -37,13 +37,26 @@ async function mainHarness(t) {
   const electron = {
     app: { getPath: () => folder },
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
-    dialog: { showSaveDialog: async () => ({ canceled: controls.canceled, filePath: controls.filePath }) },
+    dialog: {
+      showSaveDialog: async () => ({ canceled: controls.canceled, filePath: controls.filePath }),
+      showOpenDialog: async () => ({ canceled: controls.openCanceled === true, filePaths: controls.openPath ? [controls.openPath] : [] })
+    },
     desktopCapturer: { getSources: async () => controls.sources },
     shell: { showItemInFolder(filePath) { controls.revealed = filePath; } }
   };
   const module = { exports: {} };
+  const conversion = {
+    async convertToMP4(source, destination, onProgress) {
+      controls.convertCalls.push({ source, destination });
+      onProgress({ state: 'converting', message: 'MP4 변환 중…' });
+      if (controls.holdConversion) await controls.holdConversion;
+      if (controls.convertFailure) throw new Error('fixture conversion failure');
+      await fs.copyFile(source, destination, require('node:fs').constants.COPYFILE_EXCL);
+      return { path: destination, bytes: (await fs.stat(destination)).size, error: '' };
+    }
+  };
   vm.runInNewContext(await fs.readFile(path.join(__dirname, 'recording.js'), 'utf8'), {
-    require: name => name === 'electron' ? electron : require(name), module, __dirname,
+    require: name => name === 'electron' ? electron : name === './mp4' ? conversion : require(name), module, __dirname,
     Buffer, ArrayBuffer, process: { platform: 'win32' }, setImmediate,
     setTimeout(callback, milliseconds) { const timer = {}; timers.set(timer, { callback, milliseconds }); return timer; },
     clearTimeout(timer) { timers.delete(timer); }
@@ -61,7 +74,7 @@ async function mainHarness(t) {
     await capture();
     return job;
   }
-  return { controls, contents, window, handlers, invoke, capture, prepare };
+  return { controls, contents, window, handlers, timers, invoke, capture, prepare };
 }
 
 // Real filesystem writes exercise ordering and protection against data loss;
@@ -105,16 +118,19 @@ test('recording serializes chunks, preserves partial files, and never overwrites
   await assert.rejects(h.invoke('chunk', job.id, new Uint8Array(8 * 1024 * 1024 + 1)), /저장 속도/);
   await Promise.all(['first', 'second', 'third'].map(value => h.invoke('chunk', job.id, new TextEncoder().encode(value))));
   const result = await h.invoke('finish', job.id, 'encoder interrupted');
-  assert.equal(await fs.readFile(h.controls.filePath, 'utf8'), 'firstsecondthird');
+  assert.equal(await fs.readFile(result.path, 'utf8'), 'firstsecondthird');
+  assert.equal(path.extname(result.path), '.webm');
   assert.equal(result.bytes, 16);
   assert.equal(result.error, 'encoder interrupted');
   assert.equal((await h.invoke('finish', job.id)).bytes, 16);
   await h.invoke('reveal');
-  assert.equal(h.controls.revealed, h.controls.filePath);
+  assert.equal(h.controls.revealed, result.path);
+  await fs.writeFile(h.controls.filePath, 'existing user file');
   const next = await h.prepare();
   await assert.rejects(h.invoke('start', { id: next.id }), /같은 이름의 파일/);
   await h.invoke('cancel', next.id);
-  assert.equal(await fs.readFile(h.controls.filePath, 'utf8'), 'firstsecondthird');
+  assert.equal(await fs.readFile(h.controls.filePath, 'utf8'), 'existing user file');
+  assert.equal(await fs.readFile(result.path, 'utf8'), 'firstsecondthird');
 });
 
 test('recording cancellation removes only its empty file and close waits for the last chunk', async t => {
@@ -138,4 +154,53 @@ test('recording cancellation removes only its empty file and close waits for the
   await new Promise(setImmediate);
   assert.equal(h.window.destroyed, true);
   assert.equal(await fs.readFile(h.controls.filePath, 'utf8'), 'last chunk');
+  assert.equal(h.controls.convertCalls.length, 1);
+  await assert.rejects(fs.stat(h.controls.convertCalls[0].source), { code: 'ENOENT' });
+});
+
+test('MP4 failure preserves the raw recording and close waits for an active conversion', async t => {
+  const h = await mainHarness(t);
+  const job = await h.prepare();
+  await h.invoke('start', { id: job.id });
+  await h.invoke('chunk', job.id, new TextEncoder().encode('recover this recording'));
+  h.controls.convertFailure = true;
+  let release;
+  h.controls.holdConversion = new Promise(resolve => { release = resolve; });
+  const finishing = h.invoke('finish', job.id);
+  for (let attempts = 0; attempts < 100 && !h.controls.convertCalls.length; attempts++) await new Promise(setImmediate);
+  assert.equal(h.controls.convertCalls.length, 1);
+  h.window.close();
+  assert.equal(h.window.destroyed, undefined);
+  assert.equal([...h.timers.values()].some(timer => timer.milliseconds === 12_000), false);
+  await assert.rejects(async () => h.invoke('prepare', {}), /이미 녹화 중이거나/);
+  release();
+  const result = await finishing;
+  await new Promise(setImmediate);
+  assert.equal(h.window.destroyed, true);
+  assert.equal(path.extname(result.path), '.webm');
+  assert.match(result.error, /fixture conversion failure.*원본 녹화 파일/);
+  assert.equal(await fs.readFile(result.path, 'utf8'), 'recover this recording');
+  await assert.rejects(fs.stat(h.controls.filePath), { code: 'ENOENT' });
+});
+
+test('existing WebM conversion preserves the input and rejects overlapping recording or conversion', async t => {
+  const h = await mainHarness(t);
+  const source = path.join(path.dirname(h.controls.filePath), 'old-recording.webm');
+  await fs.writeFile(source, 'old source stays intact');
+  h.controls.openPath = source;
+  let release;
+  h.controls.holdConversion = new Promise(resolve => { release = resolve; });
+  const conversion = h.invoke('convert');
+  for (let attempts = 0; attempts < 100 && !h.controls.convertCalls.length; attempts++) await new Promise(setImmediate);
+  assert.equal(h.controls.convertCalls.length, 1);
+  await assert.rejects(async () => h.invoke('prepare', {}), /이미 녹화 중이거나/);
+  await assert.rejects(h.invoke('convert'), /녹화·저장·변환/);
+  release();
+  const result = await conversion;
+  assert.equal(result.path, h.controls.filePath);
+  assert.equal(result.error, '');
+  assert.equal(await fs.readFile(source, 'utf8'), 'old source stays intact');
+  assert.equal(await fs.readFile(result.path, 'utf8'), 'old source stays intact');
+  h.controls.openCanceled = true;
+  assert.equal((await h.invoke('convert')).cancelled, true);
 });

@@ -1,6 +1,6 @@
 {
   "name": "people-count-monitor",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "description": "카메라·웹 탭·PLC 통합 모니터와 프로그램 창 녹화",
   "main": "main.js",
@@ -8,6 +8,7 @@
     "start": "electron .",
     "test": "node --test",
     "test:camera": "electron scripts/camera-smoke.cjs",
+    "test:packaged": "node scripts/verify-packaged.cjs",
     "dist:win": "electron-builder --win portable --x64"
   },
   "devDependencies": {
@@ -17,8 +18,24 @@
   "build": {
     "appId": "kr.peoplecount.monitor",
     "productName": "People Count Monitor",
-    "files": ["main.js", "preload.js", "plc.js", "web-url.js", "recording.js", "ui/**", "package.json"],
-    "win": { "target": "portable" },
+    "files": [
+      "main.js",
+      "preload.js",
+      "plc.js",
+      "web-url.js",
+      "recording.js",
+      "mp4.js",
+      "ui/**",
+      "THIRD_PARTY_NOTICES.md",
+      "package.json"
+    ],
+    "asarUnpack": ["node_modules/ffmpeg-static/ffmpeg*"],
+    "win": {
+      "target": "portable"
+    },
     "artifactName": "People-Count-Monitor-${version}.${ext}"
+  },
+  "dependencies": {
+    "ffmpeg-static": "5.3.0"
   }
 }

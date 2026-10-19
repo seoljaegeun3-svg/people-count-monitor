@@ -2,6 +2,7 @@
   const startButton = document.getElementById('record-start');
   const stopButton = document.getElementById('record-stop');
   const audioInput = document.getElementById('record-audio');
+  const convertButton = document.getElementById('record-convert');
   const status = document.getElementById('record-status');
   const fileButton = document.getElementById('record-file');
   const api = window.monitor;
@@ -13,10 +14,24 @@
     startButton.disabled = state !== 'idle';
     stopButton.disabled = !['starting', 'recording'].includes(state);
     audioInput.disabled = state !== 'idle';
+    convertButton.disabled = state !== 'idle';
     status.dataset.state = state;
     status.textContent = message;
   }
   function notify(message) { if (typeof toast === 'function') toast(message); }
+  function showResult(result) {
+    if (result.bytes > 0) {
+      const name = result.path.split(/[\\/]/).pop();
+      status.title = result.path;
+      if (fileButton) { fileButton.hidden = false; fileButton.disabled = false; }
+      update('idle', result.error ? `파일 확인: ${name} · ${result.error}` : `저장 완료: ${name}`);
+      notify(result.error ? `오류가 발생했습니다. 저장 폴더에서 보존된 파일을 확인하세요. ${result.error}` : 'MP4 저장을 마쳤습니다. 저장 폴더에서 파일을 확인하세요.');
+    } else {
+      const message = result.error || failure || '녹화가 취소되었습니다.';
+      update('idle', message);
+      if (result.error || failure) notify(message);
+    }
+  }
   function elapsed() {
     const seconds = Math.floor((Date.now() - startedAt) / 1000);
     const duration = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(value => String(value).padStart(2, '0')).join(':');
@@ -31,17 +46,7 @@
       for (const track of stream?.getTracks() || []) track.stop();
       try {
         const result = await api.recordingFinish(id, failure);
-        if (result.bytes > 0) {
-          const name = result.path.split(/[\\/]/).pop();
-          status.title = result.path;
-          if (fileButton) { fileButton.hidden = false; fileButton.disabled = false; }
-          const message = result.error ? `부분 파일 저장: ${name} · ${result.error}` : `저장 완료: ${name}`;
-          update('idle', message);
-          notify(result.error ? `녹화가 중단됐습니다. 저장 폴더에서 부분 파일을 확인하세요. ${result.error}` : '녹화를 저장했습니다. 저장 폴더 버튼으로 파일을 확인하세요.');
-        } else {
-          update('idle', failure || result.error || '녹화가 취소되었습니다.');
-          if (failure) notify(failure);
-        }
+        showResult(result);
       } catch (error) {
         update('idle', `녹화 저장 오류: ${error.message}`);
         notify(`녹화 저장 오류: ${error.message}. 선택한 폴더의 부분 파일을 확인하세요.`);
@@ -51,7 +56,7 @@
   }
   function stop() {
     stopRequested = true;
-    if (state === 'idle' || state === 'stopping') return;
+    if (!['starting', 'recording'].includes(state)) return;
     clearInterval(clock);
     update('stopping', '녹화 파일 저장 중…');
     if (recorder && recorder.state !== 'inactive') recorder.stop();
@@ -121,8 +126,24 @@
   });
   stopButton.addEventListener('click', stop);
   api.onRecordingStop(stop);
+  api.onRecordingProgress(progress => {
+    if (state === 'stopping' || state === 'converting') update(state, progress.message);
+  });
+  convertButton.addEventListener('click', async () => {
+    if (state !== 'idle') return;
+    failure = '';
+    update('converting', '변환할 기존 WebM 녹화 파일을 선택하세요…');
+    try {
+      const result = await api.recordingConvert();
+      if (result.cancelled) update('idle', 'MP4 변환이 취소되었습니다.');
+      else showResult(result);
+    } catch (error) {
+      update('idle', `MP4 변환 오류: ${error.message}`);
+      notify(`MP4 변환 오류: ${error.message}. 기존 원본은 유지됩니다.`);
+    }
+  });
   fileButton?.addEventListener('click', () => api.recordingReveal().catch(error => notify(error.message)));
   if (fileButton) fileButton.hidden = true;
   audioInput.checked = false;
-  update('idle', '녹화 안 함 · 프로그램 창 전체를 저장');
+  update('idle', '녹화 안 함 · MP4로 저장');
 })();

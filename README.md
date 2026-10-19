@@ -4,7 +4,7 @@ Windows에서 **왼쪽 카메라 웹 뷰어 · 오른쪽 웹 탭 · 아래 LS PL
 
 ## 실행
 
-**일반 사용자는 [Windows 다운로드 페이지](https://github.com/seoljaegeun3-svg/people-count-monitor/releases/latest)의 Assets에서 `People-Count-Monitor-1.1.0.exe`를 받아 더블클릭하세요. Node.js 설치는 필요 없습니다.** Source code ZIP은 실행 파일이 아닙니다.
+**일반 사용자는 [Windows 다운로드 페이지](https://github.com/seoljaegeun3-svg/people-count-monitor/releases/latest)의 Assets에서 `People-Count-Monitor-1.1.1.exe`를 받아 더블클릭하세요. Node.js나 영상 변환기를 따로 설치할 필요가 없습니다.** Source code ZIP은 실행 파일이 아닙니다.
 
 아래 명령은 소스 코드를 개발하거나 직접 빌드할 때만 사용합니다.
 
@@ -21,7 +21,7 @@ npm start
 npm run dist:win
 ```
 
-결과: `dist/People-Count-Monitor-1.1.0.exe`. 수신 PC에는 Node.js가 필요 없습니다. EXE는 코드 서명되지 않습니다.
+결과: `dist/People-Count-Monitor-1.1.1.exe`. 수신 PC에는 Node.js가 필요 없습니다. EXE는 코드 서명되지 않습니다. Windows 배포는 Windows에서 `npm ci`로 받은 Windows용 내장 변환기를 사용해야 합니다.
 
 GitHub의 **Actions → Build Windows download → Run workflow**로도 Windows 빌드·모의 PLC 테스트·EXE 배포를 실행할 수 있습니다. 실패한 빌드는 새 다운로드를 게시하지 않습니다.
 
@@ -38,13 +38,15 @@ GitHub의 **Actions → Build Windows download → Run workflow**로도 Windows 
 
 1. 상단 **● 녹화 시작**을 누르고 저장 위치와 새 파일 이름을 선택합니다.
 2. **녹화 중** 시간 표시를 확인합니다. 화면에 보이는 카메라·선택된 웹 탭·PLC 값·상태가 함께 녹화됩니다.
-3. **■ 중지**를 누르고 **저장 완료**를 기다립니다. **저장 폴더**로 파일을 찾을 수 있습니다.
+3. **■ 중지**를 누르고 **MP4 변환 중 → 저장 완료**를 기다립니다. 녹화 길이와 PC 성능에 따라 변환 시간이 걸릴 수 있습니다. **저장 폴더**로 파일을 찾을 수 있습니다.
 
-형식은 **WebM 동영상**입니다. Edge·Chrome 또는 WebM을 지원하는 동영상 플레이어에서 재생할 수 있습니다. 기본 저장 위치는 Windows 동영상 폴더이며 다른 폴더도 선택할 수 있습니다. 같은 이름의 기존 파일을 덮어쓰지 않으므로 새 파일 이름으로 저장하세요. 창을 최소화하면 정상적으로 캡처되지 않을 수 있으니 녹화 중에는 창을 열어두세요.
+저장 형식은 **MP4(H.264 영상 / 선택형 AAC 소리)**입니다. 전체 길이와 탐색 정보를 포함하므로 플레이어의 재생 막대를 움직여 앞뒤 원하는 시점으로 이동할 수 있습니다. 기본 저장 위치는 Windows 동영상 폴더이며 다른 폴더도 선택할 수 있습니다. 같은 이름의 기존 파일을 덮어쓰지 않으므로 새 파일 이름으로 저장하세요. 창을 최소화하면 정상적으로 캡처되지 않을 수 있으니 녹화 중에는 창을 열어두세요.
+
+**기존 녹화 파일:** 상단 **MP4 변환**을 누르고 이전 버전으로 저장한 `.webm` 파일을 선택한 뒤 새 `.mp4` 저장 위치를 고릅니다. 변환이 완료되면 **저장 폴더**를 누르세요. 기존 WebM 원본은 유지합니다. 파일 확장자만 바꾸는 방식으로는 변환되지 않습니다.
 
 **PC 소리 포함**은 기본적으로 꺼져 있습니다. 켜면 Windows의 PC 재생음을 함께 녹음하므로 다른 앱 소리도 포함될 수 있습니다. PC 소리를 지원하지 않는 장치에서 시작 오류가 나면 체크를 해제하고 다시 시작하세요. 마이크 녹음은 하지 않습니다. 사용 중인 프로그램 창만 영상으로 캡처하며 다른 프로그램 화면은 선택하거나 녹화하지 않습니다.
 
-녹화 데이터는 파일에 순서대로 나누어 저장하므로 긴 녹화 전체를 메모리에 쌓지 않습니다. 디스크 오류·강제 종료 시 가능한 부분 파일을 남기며, 정상적인 창 닫기는 녹화를 마친 뒤 종료합니다. 불완전한 부분 파일의 재생 가능 여부는 중단 시점에 따라 다릅니다.
+녹화 중에는 같은 폴더에 WebM 원본을 나누어 기록하고, 중지 후 내장 FFmpeg로 MP4를 완성합니다. 긴 녹화 전체를 메모리에 쌓지 않습니다. MP4 저장이 성공한 뒤 녹화 임시 원본을 정리하며, 변환 실패 시 복구용 WebM 원본을 보존합니다. 저장 공간은 변환 중 원본과 MP4가 함께 들어갈 만큼 필요합니다. 정상적인 창 닫기는 변환을 마친 뒤 종료합니다. 디스크 오류·강제 종료로 남은 불완전한 원본의 재생·변환 가능 여부는 중단 시점에 따라 다릅니다.
 
 기본 PLC 설정은 기존 [people-counter-native](https://github.com/seoljaegeun3-svg/people-counter-native) 저장소의 `plc.go`, `settings.go`에서 확인한 **LS XGT Ethernet / 192.168.1.2:2004 / %MW0 / 500ms**입니다. 실제 장비가 이 설정을 사용한다는 확인은 별도로 필요합니다. Modbus TCP용 프로그램은 아닙니다. unsigned 16-bit WORD 원시값(0~65535)을 표시합니다. PLC 내부 값의 의미와 카메라 IN/OUT 집계의 대응은 현장 로직에 따라 달라집니다.
 
@@ -61,11 +63,15 @@ Electron 사용자 데이터 폴더(`app.getPath('userData')`)의 `settings.json
 ```powershell
 npm test
 npm run test:camera
+# Windows EXE 빌드 후 내장 변환기와 라이선스 포함 검증
+npm run test:packaged
 ```
 
 외부 장비에 연결하지 않는 로컬 모의 XGT 서버로 읽기 패킷, 분할 응답, 0/65535, 호출 ID 불일치, PLC 오류, 잘못된 길이·블록·워드 크기, 중간 연결 종료, 타임아웃을 검증합니다.
 
-`test:camera`는 실제 Electron/Chromium에서 loopback 모의 서버의 Basic/Digest 로그인, 잘못된 비밀번호 재입력, 취소, 다른 출처 인증 거부, HTTP 401/403 상태, 홈/피플카운팅 바로가기, 설정 파일 비밀번호 미저장을 검증합니다. 웹 검색·탭 추가/선택/삭제·모든 웹 창 닫기와 재추가·좌우/상하 비율·작은 창 배치·실제 창 녹화 저장과 Chromium 영상 재생도 검증합니다. 외부 HTTPS 페이지는 모의 응답을 사용합니다. 자체 창 캡처를 지원하는 Windows 데스크톱이 필요하며 외부 네트워크 요청은 보내지 않습니다. Windows 배포 workflow는 이 테스트가 통과해야 EXE를 게시합니다. 선택형 PC 소리는 실제 오디오 장치에서 별도로 확인해야 합니다.
+`test:camera`는 실제 Electron/Chromium에서 loopback 모의 서버의 Basic/Digest 로그인, 잘못된 비밀번호 재입력, 취소, 다른 출처 인증 거부, HTTP 401/403 상태, 홈/피플카운팅 바로가기, 설정 파일 비밀번호 미저장을 검증합니다. 웹 검색·탭 추가/선택/삭제·모든 웹 창 닫기와 재추가·좌우/상하 비율·작은 창 배치·실제 창 녹화 MP4 저장과 Chromium 영상 재생도 검증합니다. 화면 색을 바꾸며 녹화하고, 완성된 MP4의 유한한 길이·앞뒤 시간 탐색 후 양쪽 화면 픽셀을 확인합니다. 외부 HTTPS 페이지는 모의 응답을 사용합니다. 자체 창 캡처를 지원하는 Windows 데스크톱이 필요하며 외부 네트워크 요청은 보내지 않습니다. Windows 배포 workflow는 이 테스트와 배포본 내장 FFmpeg 변환 검증이 통과해야 EXE를 게시합니다. 선택형 PC 소리는 실제 오디오 장치에서 별도로 확인해야 합니다.
+
+내장 영상 변환기의 저작권·라이선스와 소스 위치는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 참고하세요.
 
 실제 Windows GUI, 카메라 영상·로그인, YouTube 영상 재생, 실제 PLC 값의 일치는 현장 PC에서 확인해야 합니다. 카메라와 PLC 사설 IP에 클라우드에서 연결을 시도하지 않습니다.
 
