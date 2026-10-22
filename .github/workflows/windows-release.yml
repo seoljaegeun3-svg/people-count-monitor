@@ -34,6 +34,9 @@ jobs:
             Write-Output "::error title=Windows tests failed::$details"
           }
           exit $testExit
+      - name: Verify actual PLC value display
+        timeout-minutes: 2
+        run: npm run test:plc-display
       - run: npm run dist:win -- --config.win.signAndEditExecutable=false
       - name: Test packaged model runtime and video converter
         shell: pwsh
@@ -49,8 +52,8 @@ jobs:
       - name: Save tested Windows executable
         uses: actions/upload-artifact@v4
         with:
-          name: People-Count-Monitor-1.3.1-Windows
-          path: dist/People-Count-Monitor-1.3.1.exe
+          name: People-Count-Monitor-1.3.2-Windows
+          path: dist/People-Count-Monitor-1.3.2.exe
           if-no-files-found: error
       - name: Test actual camera comparison and recording
         timeout-minutes: 3

@@ -155,7 +155,12 @@ window.monitor.onPLC(data => {
     const element = $(`plc-value-${word.slice(1).toLowerCase()}`);
     const value = ok ? data.words?.[word] : null;
     element.textContent = Number.isInteger(value) ? String(value) : '—';
-    element.title = ok ? data.wordErrors?.[word] || '' : '';
+    const error = ok ? data.wordErrors?.[word] : data.message;
+    const status = $(`plc-status-${word.slice(1).toLowerCase()}`);
+    element.title = error || '';
+    status.textContent = error ? `오류: ${error}` : Number.isInteger(value) ? '수신 중' : data.state === 'connecting' ? '연결 중…' : '연결 대기';
+    status.title = error || '';
+    status.classList.toggle('error', Boolean(error));
   }
   $('plc-status').className = `status ${ok ? 'ok' : data.state === 'error' ? 'error' : ''}`;
   $('plc-status').textContent = { ok: '● 실시간 수신', error: '● 통신 오류', off: '연결 중지', connecting: '연결 중…' }[data.state];

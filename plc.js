@@ -63,7 +63,12 @@ function readWord(config) {
 }
 async function readMonitorWords(config) {
   const addresses = [...new Set([config.word, '%MW2', '%MW3'])];
-  const results = await Promise.allSettled(addresses.map(word => readWord({ ...config, word })));
+  const results = [];
+  // Read one address at a time: PLC Ethernet modules can limit concurrent clients.
+  for (const word of addresses) {
+    try { results.push({ status: 'fulfilled', value: await readWord({ ...config, word }) }); }
+    catch (reason) { results.push({ status: 'rejected', reason }); }
+  }
   if (results[0].status === 'rejected') throw results[0].reason;
   const words = {}, wordErrors = {};
   results.forEach((result, index) => {
