@@ -34,17 +34,6 @@ jobs:
             Write-Output "::error title=Windows tests failed::$details"
           }
           exit $testExit
-      - name: Test actual camera comparison and recording
-        shell: pwsh
-        run: |
-          $testLog = & npm run test:camera 2>&1
-          $testExit = $LASTEXITCODE
-          $testLog | ForEach-Object { Write-Output $_ }
-          if ($testExit -ne 0) {
-            $details = ($testLog -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Output "::error title=Test actual camera comparison and recording failed::$details"
-          }
-          exit $testExit
       - run: npm run dist:win -- --config.win.signAndEditExecutable=false
       - name: Test packaged model runtime and video converter
         shell: pwsh
@@ -55,6 +44,24 @@ jobs:
           if ($testExit -ne 0) {
             $details = ($testLog -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Output "::error title=Test packaged model runtime and video converter failed::$details"
+          }
+          exit $testExit
+      - name: Save tested Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: People-Count-Monitor-1.3.1-Windows
+          path: dist/People-Count-Monitor-1.3.1.exe
+          if-no-files-found: error
+      - name: Test actual camera comparison and recording
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $testLog = & npm run test:camera 2>&1
+          $testExit = $LASTEXITCODE
+          $testLog | ForEach-Object { Write-Output $_ }
+          if ($testExit -ne 0) {
+            $details = ($testLog -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Test actual camera comparison and recording failed::$details"
           }
           exit $testExit
       - name: Upload Windows executable and publish download
