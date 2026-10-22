@@ -2,7 +2,7 @@ const { app, BrowserWindow, WebContentsView, ipcMain, screen } = require('electr
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
-const { validatePLC, readWord } = require('./plc');
+const { validatePLC, readMonitorWords } = require('./plc');
 const { resolveWebInput, safeWebURL } = require('./web-url');
 const { installRecording } = require('./recording');
 
@@ -16,7 +16,7 @@ const legacyCameraURL = `http://192.168.1.100${peopleCountingPath}`;
 let cameraOrigin, cameraAuth;
 let cameraReady = false, cameraVisible = false, cameraGeometry, cameraSnapshotIdentity;
 const defaults = {
-  camera: 'http://192.168.1.100/',
+  camera: 'http://192.168.1.100/home/setup/opensdk/html/WiseAI/index.html#/analytics/setup/IVA_AREA',
   youtube: 'https://www.youtube.com/',
   plc: { host: '192.168.1.2', port: 2004, word: '%MW0', interval: 500 }
 };
@@ -90,8 +90,8 @@ async function poll(token) {
   while (enabled && generation === token && !window.isDestroyed()) {
     const start = Date.now();
     try {
-      const value = await readWord(settings.plc);
-      if (generation === token) emit('plc', { state: 'ok', value, time: Date.now() });
+      const { value, words, wordErrors } = await readMonitorWords(settings.plc);
+      if (generation === token) emit('plc', { state: 'ok', value, words, wordErrors, time: Date.now() });
     } catch (error) {
       if (generation === token) emit('plc', { state: 'error', message: error.message });
     }
@@ -112,7 +112,7 @@ app.whenReady().then(async () => {
   try {
     const loaded = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
     settings = { camera: safeURL('camera', loaded.camera), youtube: safeURL('youtube', loaded.youtube), plc: validatePLC(loaded.plc) };
-    if (settings.camera === legacyCameraURL) settings.camera = defaults.camera;
+    if ([legacyCameraURL, 'http://192.168.1.100/'].includes(settings.camera)) settings.camera = defaults.camera;
   } catch (error) {
     if (error.code !== 'ENOENT') settingsWarning = '저장된 설정을 읽지 못해 기본값을 사용합니다. 설정에서 다시 저장하세요.';
   }
