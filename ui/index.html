@@ -35,7 +35,11 @@
     <div class="row-divider" role="separator" aria-label="위아래 화면 비율" aria-orientation="horizontal" tabindex="0"></div>
     <section class="plc-panel" aria-label="PLC 실시간 값">
       <div class="plc-heading"><span class="eyebrow">03 / LIVE PLC</span><h2>피플카운팅 값</h2><span id="plc-endpoint">LS XGT · 192.168.1.2:2004</span></div>
-      <div class="reading"><span class="word" id="plc-word">%MW0</span><strong id="plc-value">—</strong><span class="unit">WORD 값</span></div>
+      <div class="plc-readings">
+        <div class="reading"><span class="word" id="plc-word">%MW0</span><strong id="plc-value">—</strong><span class="unit">WORD 값</span></div>
+        <div class="reading extra-reading"><span class="word">%MW2</span><strong id="plc-value-mw2">—</strong></div>
+        <div class="reading extra-reading"><span class="word">%MW3</span><strong id="plc-value-mw3">—</strong></div>
+      </div>
       <div class="plc-detail"><span id="plc-status" class="status">연결 대기</span><p id="plc-message">설정을 확인한 후 연결하세요.</p><small id="plc-updated">수신 기록 없음</small></div>
       <button class="primary" id="plc-connect">PLC 연결</button>
     </section>

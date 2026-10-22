@@ -61,4 +61,16 @@ function readWord(config) {
     });
   });
 }
-module.exports = { validatePLC, readWord, readRequest };
+async function readMonitorWords(config) {
+  const addresses = [...new Set([config.word, '%MW2', '%MW3'])];
+  const results = await Promise.allSettled(addresses.map(word => readWord({ ...config, word })));
+  if (results[0].status === 'rejected') throw results[0].reason;
+  const words = {}, wordErrors = {};
+  results.forEach((result, index) => {
+    const word = addresses[index];
+    words[word] = result.status === 'fulfilled' ? result.value : null;
+    if (result.status === 'rejected') wordErrors[word] = result.reason.message;
+  });
+  return { value: words[config.word], words, wordErrors };
+}
+module.exports = { validatePLC, readWord, readRequest, readMonitorWords };
