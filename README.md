@@ -4,7 +4,7 @@ Windows에서 **왼쪽 카메라 웹 뷰어 · 오른쪽 웹 탭 · 아래 LS PL
 
 ## 실행
 
-**일반 사용자는 [Windows 다운로드 페이지](https://github.com/seoljaegeun3-svg/people-count-monitor/releases/latest)의 Assets에서 `People-Count-Monitor-1.3.0.exe`를 받아 더블클릭하세요. Node.js나 영상 변환기를 따로 설치할 필요가 없습니다.** Source code ZIP은 실행 파일이 아닙니다.
+**현재 수정본은 [Windows 1.3.2 다운로드](https://github.com/seoljaegeun3-svg/people-count-monitor/actions/runs/39760879971/artifacts/12418037032)에서 ZIP을 받아 압축을 풀고 `People-Count-Monitor-1.3.2.exe`를 실행하세요(GitHub 로그인 필요). 설정 버튼의 v1.3.2 표시로 버전을 확인할 수 있습니다. Node.js나 영상 변환기를 따로 설치할 필요가 없습니다.** Source code ZIP은 실행 파일이 아닙니다.
 
 아래 명령은 소스 코드를 개발하거나 직접 빌드할 때만 사용합니다.
 
@@ -21,7 +21,7 @@ npm start
 npm run dist:win
 ```
 
-결과: `dist/People-Count-Monitor-1.3.0.exe`. 수신 PC에는 Node.js가 필요 없습니다. EXE는 코드 서명되지 않습니다. Windows 배포는 Windows에서 `npm ci`로 받은 Windows용 내장 변환기를 사용해야 합니다.
+결과: `dist/People-Count-Monitor-1.3.2.exe`. 수신 PC에는 Node.js가 필요 없습니다. EXE는 코드 서명되지 않습니다. Windows 배포는 Windows에서 `npm ci`로 받은 Windows용 내장 변환기를 사용해야 합니다.
 
 GitHub의 **Actions → Build Windows download → Run workflow**로도 Windows 빌드·모의 PLC 테스트·EXE 배포를 실행할 수 있습니다. 실패한 빌드는 새 다운로드를 게시하지 않습니다.
 
@@ -30,7 +30,7 @@ GitHub의 **Actions → Build Windows download → Run workflow**로도 Windows 
 1. 카메라·PLC가 연결된 Windows PC에서 실행합니다.
 2. 기본 주소 `http://192.168.1.100/home/setup/opensdk/html/WiseAI/index.html#/analytics/setup/IVA_AREA`에서 시작합니다. 카메라가 HTTP Basic/Digest 인증을 요구하면 앱의 **카메라 로그인** 창에 카메라 아이디·비밀번호를 입력합니다. 웹 로그인 화면이 나오면 그 화면에서 로그인합니다. 로그인 후 왼쪽 상단 **피플카운팅**을 누르면 스크린샷의 WiseAI 페이지를 엽니다. **로그인 / 홈**은 카메라 로그인 시작 화면으로 돌아갑니다. 비밀번호를 주소에 넣지 마세요.
 3. 오른쪽 주소창에 검색어를 입력하고 Enter 또는 **이동**을 누르면 구글에서 검색합니다. `google.com` 같은 웹 주소나 YouTube 영상 URL도 열 수 있습니다. 상단 **Google / YouTube** 버튼으로 바로 이동하고, 뒤로/앞으로/새로고침을 사용할 수 있습니다. 새 창으로 열리는 검색 결과는 같은 오른쪽 화면에 표시합니다. **연결 설정 → 브라우저 시작 주소 또는 검색어**에서 시작 화면을 바꿀 수 있습니다. iframe이 아니라 독립 Chromium 화면을 사용합니다. 일부 영상의 DRM·코덱·Google 로그인 정책은 Electron에서 제한될 수 있습니다.
-4. **연결 설정**에서 PLC IP·포트·워드·주기를 확인합니다. **PLC 연결**을 누르면 읽기가 시작됩니다. 연결 실패 시 자동으로 다시 조회하며 이전 값을 지웁니다. **연결 중지**로 멈춥니다. 설정한 주 주소(기본 `%MW0`) 옆에 `%MW2`, `%MW3`도 함께 표시합니다. 추가 주소만 읽기에 실패하면 해당 값은 `—`로 표시하며, 주 주소의 읽기와 AI 비교는 유지합니다.
+4. **연결 설정**에서 PLC IP·포트·워드·주기를 확인합니다. **PLC 연결**을 누르면 읽기가 시작됩니다. 연결 실패 시 자동으로 다시 조회하며 이전 값을 지웁니다. **연결 중지**로 멈춥니다. 설정한 주 주소(기본 `%MW0`) 옆에 `%MW2`, `%MW3`도 함께 표시합니다. PLC 접속 제한과 충돌하지 않도록 주소를 순차 조회합니다. 추가 주소만 읽기에 실패하면 해당 값은 `—`와 오류 메시지로 표시하며, 주 주소의 읽기와 AI 비교는 유지합니다.
 5. 가운데 세로 경계로 **좌우 비율**, 영상과 PLC 사이의 가로 경계로 **위아래 비율**을 조절합니다. 키보드로는 경계에 포커스한 뒤 해당 방향키를 사용합니다. 창의 위·아래 테두리를 끌어 높이도 줄일 수 있습니다(최소 창 크기 860×500). 비율은 자동으로 기억합니다. 카메라 상단의 `− / ＋`는 페이지 크기를 조절합니다.
 6. **웹 창 추가** 또는 탭 옆 **＋**로 웹 탭을 추가하고 **×**로 닫습니다. 모든 탭을 닫으면 오른쪽 영역이 사라지고 카메라가 넓어집니다. **웹 창 추가**로 다시 열 수 있습니다. 오른쪽 영역을 닫았는지는 다음 실행에도 기억합니다. 열린 개별 탭 목록은 종료 시 초기화하며 시작 주소 설정을 사용합니다. 탭은 최대 12개입니다.
 
