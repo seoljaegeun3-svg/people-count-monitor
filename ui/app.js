@@ -154,11 +154,16 @@ window.monitor.onPLC(data => {
   for (const word of ['%MW2', '%MW3']) {
     const element = $(`plc-value-${word.slice(1).toLowerCase()}`);
     const value = ok ? data.words?.[word] : null;
-    element.textContent = Number.isInteger(value) ? String(value) : '—';
+    const workArea = word === '%MW3';
+    element.textContent = workArea
+      ? value === 1 ? '작업영역에 사람 감지' : value === 0 ? '작업 영역 사람감지 없음' : Number.isInteger(value) ? '작업영역 상태 확인 필요' : '작업영역 상태 확인 불가'
+      : Number.isInteger(value) ? String(value) : '—';
+    element.classList.toggle('detected', workArea && value === 1);
     const error = ok ? data.wordErrors?.[word] : data.message;
     const status = $(`plc-status-${word.slice(1).toLowerCase()}`);
     element.title = error || '';
     status.textContent = error ? `오류: ${error}` : Number.isInteger(value) ? '수신 중' : data.state === 'connecting' ? '연결 중…' : '연결 대기';
+    status.hidden = workArea;
     status.title = error || '';
     status.classList.toggle('error', Boolean(error));
   }
