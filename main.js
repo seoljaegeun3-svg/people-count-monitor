@@ -11,12 +11,10 @@ let window, panels, settings, settingsPath, recordingController;
 const browserTabs = [];
 let activeTabId = null, lastBounds = {};
 let enabled = false, generation = 0;
-const peopleCountingPath = '/home/setup/opensdk/html/WiseAI/index.html#/statistics/setup/PEOPLE_COUNTING';
-const legacyCameraURL = `http://192.168.1.100${peopleCountingPath}`;
 let cameraOrigin, cameraAuth;
 let cameraReady = false, cameraVisible = false, cameraGeometry, cameraSnapshotIdentity;
 const defaults = {
-  camera: 'http://192.168.1.100/home/setup/opensdk/html/WiseAI/index.html#/analytics/setup/IVA_AREA',
+  camera: 'http://192.168.1.8/',
   youtube: 'https://www.youtube.com/',
   plc: { host: '192.168.1.2', port: 2004, word: '%MW0', interval: 500 }
 };
@@ -112,7 +110,8 @@ app.whenReady().then(async () => {
   try {
     const loaded = JSON.parse(await fs.readFile(settingsPath, 'utf8'));
     settings = { camera: safeURL('camera', loaded.camera), youtube: safeURL('youtube', loaded.youtube), plc: validatePLC(loaded.plc) };
-    if ([legacyCameraURL, 'http://192.168.1.100/'].includes(settings.camera)) settings.camera = defaults.camera;
+    const cameraURL = new URL(settings.camera);
+    if (cameraURL.hostname === '192.168.1.100' || cameraURL.hostname === '192.168.1.8' && cameraURL.pathname.startsWith('/home/setup/opensdk/html/WiseAI/')) settings.camera = defaults.camera;
   } catch (error) {
     if (error.code !== 'ENOENT') settingsWarning = '저장된 설정을 읽지 못해 기본값을 사용합니다. 설정에서 다시 저장하세요.';
   }
@@ -167,7 +166,7 @@ app.whenReady().then(async () => {
       if (code >= 200 && code < 400) loadFailed = false;
       if (code >= 400) {
         loadFailed = true;
-        emitPage(name, tabId, { state: code === 401 ? 'unauthorized' : 'error', message: code === 401 && name === 'camera' ? '카메라 로그인이 필요합니다. 로그인 / 홈에서 시작하세요.' : `HTTP ${code}` });
+        emitPage(name, tabId, { state: code === 401 ? 'unauthorized' : 'error', message: code === 401 && name === 'camera' ? '카메라 로그인이 필요합니다. TD2000 홈 / 로그인에서 시작하세요.' : `HTTP ${code}` });
       }
     });
     view.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
@@ -267,9 +266,9 @@ app.whenReady().then(async () => {
       contents.loadURL(action === 'google' ? 'https://www.google.com/' : 'https://www.youtube.com/').catch(() => {});
       return;
     }
-    if (name === 'camera' && ['home', 'people-counting'].includes(action)) {
+    if (name === 'camera' && action === 'home') {
       cancelCameraAuth();
-      const target = new URL(action === 'home' ? '/' : peopleCountingPath, cameraOrigin).href;
+      const target = new URL('/', cameraOrigin).href;
       contents.loadURL(target).catch(() => {});
       return;
     }

@@ -53,21 +53,33 @@ const deadline = setTimeout(() => { console.error('PLC display smoke timed out')
   await Promise.all([app.whenReady(), listen(plc), listen(camera)]);
   const origin = 'http://127.0.0.1:' + camera.address().port;
   fs.writeFileSync(path.join(profile, 'settings.json'), JSON.stringify({
-    camera: origin, youtube: 'https://www.youtube.com/',
+    camera: 'http://192.168.1.100/home/setup/opensdk/html/WiseAI/index.html#/analytics/setup/IVA_AREA', youtube: 'https://www.youtube.com/',
     plc: { host: '127.0.0.1', port: plc.address().port, word: '%MW0', interval: 500 }
   }));
   session.fromPartition('persist:youtube').protocol.handle('https', () => new Response('<h1>Local browser fixture</h1>', { headers: { 'Content-Type': 'text/html' } }));
-  for (const name of ['camera', 'youtube']) session.fromPartition('persist:' + name).webRequest.onBeforeRequest(
+  const cameraRequests = [];
+  session.fromPartition('persist:camera').protocol.handle('http', request => {
+    cameraRequests.push(request.url);
+    return new Response('<h1>TD2000 home fixture</h1>', { headers: { 'Content-Type': 'text/html' } });
+  });
+  session.fromPartition('persist:youtube').webRequest.onBeforeRequest(
     { urls: ['http://*/*'] }, (details, callback) => callback({ cancel: new URL(details.url).hostname !== '127.0.0.1' }));
   require('../main.js');
   await until(() => BrowserWindow.getAllWindows().length > 0, 'window');
   const win = BrowserWindow.getAllWindows()[0];
   const ui = script => win.webContents.executeJavaScript(script);
-  await until(() => ui("document.getElementById('camera-url')?.value.startsWith('http://127.0.0.1:')"), 'settings loaded');
+  await until(() => ui("document.getElementById('camera-url')?.value === 'http://192.168.1.8/'"), 'old WiseAI camera migrates to TD2000 home');
+  assert.equal((await ui('window.monitor.settings()')).camera, 'http://192.168.1.8/');
+  await until(() => cameraRequests.includes('http://192.168.1.8/'), 'TD2000 home opens');
+  assert.equal(await ui("document.querySelector('[data-action=people-counting]') === null"), true);
+  await ui("document.querySelector('[data-action=home]').click(); true;");
+  await until(() => cameraRequests.length >= 2, 'TD2000 home shortcut');
+  assert(cameraRequests.every(url => url === 'http://192.168.1.8/'), 'camera never opens the obsolete WiseAI path');
+  console.log('PASS: saved legacy camera migrates to TD2000 at 192.168.1.8; startup and home shortcut load the root page');
   await ui('window.monitor.connect(true)');
   await until(() => ui("document.getElementById('plc-value').textContent === '41' && document.getElementById('plc-value-mw2').textContent === '0' && document.getElementById('plc-value-mw3').textContent === '작업영역에 사람 감지'"), 'work area detected and numeric MW0/MW2');
   assert.equal(peak, 1, 'PLC requests never overlap');
-  assert.match(await ui("document.getElementById('open-settings').textContent"), /1\.3\.3/);
+  assert.match(await ui("document.getElementById('open-settings').textContent"), /1\.3\.4/);
   win.setSize(860, 500);
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.equal(await ui("['plc-value', 'plc-value-mw2', 'plc-value-mw3'].every(id => { const b = document.getElementById(id).getBoundingClientRect(); return b.width > 0 && b.height > 0 && b.left >= 0 && b.right <= innerWidth && b.top >= 0 && b.bottom <= innerHeight; })"), true, 'all three readings visible at minimum window size');

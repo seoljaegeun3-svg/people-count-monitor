@@ -140,10 +140,9 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
 
   await ui("document.querySelector('[data-action=home]').click()");
   await until(() => camera.getURL() === `${origin}/`, 'camera home');
-  await ui("document.querySelector('[data-action=people-counting]').click()");
-  await until(() => camera.getURL().endsWith('#/statistics/setup/PEOPLE_COUNTING'), 'people-counting shortcut');
+  assert.equal(await ui("document.querySelector('[data-action=people-counting]') === null"), true, 'obsolete WiseAI shortcut is absent');
   assert(!fs.readFileSync(path.join(profile, 'settings.json'), 'utf8').includes(password));
-  console.log('PASS: home/counting shortcuts, camera password absent from settings');
+  console.log('PASS: TD2000 home shortcut, no obsolete vendor page, camera password absent from settings');
 
   const browser = win.contentView.children[1].webContents;
   const navigateWeb = input => ui(`document.getElementById('youtube-url').value = ${JSON.stringify(input)}; document.getElementById('youtube-form').requestSubmit(); true;`);
