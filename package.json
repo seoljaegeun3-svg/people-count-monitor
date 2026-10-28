@@ -1,6 +1,6 @@
 {
   "name": "people-count-monitor",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "private": true,
   "description": "카메라 통행 인원과 PLC 비교·확인 구간 MP4 녹화",
   "main": "main.js",

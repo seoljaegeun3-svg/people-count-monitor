@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'">
-  <title>People Count Monitor 1.3.4</title>
+  <title>People Count Monitor 1.3.5</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
     <div class="brand-icon">◉</div><div><h1>People Count <span>Monitor</span></h1><p>카메라부터 PLC까지, 하나의 화면에서</p></div>
     <div class="header-right">
       <div class="recording-controls"><label class="audio-choice"><input id="record-audio" type="checkbox">PC 소리 포함 <span>(다른 앱 소리도 녹음)</span></label><button id="record-start">● 녹화 시작</button><button id="record-stop" disabled>■ 중지</button><button id="record-convert" title="기존 WebM 녹화 파일을 MP4로 변환">MP4 변환</button><button id="record-file" disabled>저장 폴더</button><span id="record-status" role="status" aria-live="polite">녹화 대기</span></div>
-      <button id="add-browser">＋ 웹 창 추가</button><time id="clock"></time><button id="open-settings">⚙ 설정 · v1.3.4</button>
+      <button id="add-browser">＋ 웹 창 추가</button><time id="clock"></time><button id="open-settings">⚙ 설정 · v1.3.5</button>
     </div>
   </header>
   <main>
@@ -37,8 +37,7 @@
       <div class="plc-heading"><span class="eyebrow">03 / LIVE PLC</span><h2>피플카운팅 값</h2><span id="plc-endpoint">LS XGT · 192.168.1.2:2004</span></div>
       <div class="plc-readings">
         <div class="reading"><span class="word" id="plc-word">%MW0</span><strong id="plc-value">—</strong><span class="unit">WORD 값</span></div>
-        <div class="reading extra-reading"><span class="word">%MW2</span><strong id="plc-value-mw2">—</strong><small class="word-status" id="plc-status-mw2" role="status">연결 대기</small></div>
-        <div class="reading extra-reading work-area-reading"><strong id="plc-value-mw3" role="status" aria-live="polite">작업영역 상태 확인 불가</strong><small class="word-status" id="plc-status-mw3" hidden></small></div>
+        <div class="reading extra-reading work-area-reading"><strong id="plc-value-mw3" role="status" aria-live="polite">작업영역 상태 확인 불가</strong></div>
       </div>
       <div class="plc-detail"><span id="plc-status" class="status">연결 대기</span><p id="plc-message">설정을 확인한 후 연결하세요.</p><small id="plc-updated">수신 기록 없음</small></div>
       <button class="primary" id="plc-connect">PLC 연결</button>

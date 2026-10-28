@@ -62,7 +62,7 @@ function readWord(config) {
   });
 }
 async function readMonitorWords(config) {
-  const addresses = [...new Set([config.word, '%MW2', '%MW3'])];
+  const addresses = [...new Set([config.word, '%MW3'])];
   const results = [];
   // Read one address at a time: PLC Ethernet modules can limit concurrent clients.
   for (const word of addresses) {

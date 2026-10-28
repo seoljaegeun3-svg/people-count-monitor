@@ -151,22 +151,11 @@ window.monitor.onPLC(data => {
   connected = data.state !== 'off';
   $('plc-connect').textContent = connected ? '연결 중지' : 'PLC 연결';
   $('plc-value').textContent = ok ? String(data.value) : '—';
-  for (const word of ['%MW2', '%MW3']) {
-    const element = $(`plc-value-${word.slice(1).toLowerCase()}`);
-    const value = ok ? data.words?.[word] : null;
-    const workArea = word === '%MW3';
-    element.textContent = workArea
-      ? value === 1 ? '작업영역에 사람 감지' : value === 0 ? '작업 영역 사람감지 없음' : Number.isInteger(value) ? '작업영역 상태 확인 필요' : '작업영역 상태 확인 불가'
-      : Number.isInteger(value) ? String(value) : '—';
-    element.classList.toggle('detected', workArea && value === 1);
-    const error = ok ? data.wordErrors?.[word] : data.message;
-    const status = $(`plc-status-${word.slice(1).toLowerCase()}`);
-    element.title = error || '';
-    status.textContent = error ? `오류: ${error}` : Number.isInteger(value) ? '수신 중' : data.state === 'connecting' ? '연결 중…' : '연결 대기';
-    status.hidden = workArea;
-    status.title = error || '';
-    status.classList.toggle('error', Boolean(error));
-  }
+  const value = ok ? data.words?.['%MW3'] : null;
+  const workArea = $('plc-value-mw3');
+  workArea.textContent = value === 0 ? '작업영역에 사람 감지' : value === 1 ? '작업 영역 사람감지 없음' : Number.isInteger(value) ? '작업영역 상태 확인 필요' : '작업영역 상태 확인 불가';
+  workArea.classList.toggle('detected', value === 0);
+  workArea.title = (ok ? data.wordErrors?.['%MW3'] : data.message) || '';
   $('plc-status').className = `status ${ok ? 'ok' : data.state === 'error' ? 'error' : ''}`;
   $('plc-status').textContent = { ok: '● 실시간 수신', error: '● 통신 오류', off: '연결 중지', connecting: '연결 중…' }[data.state];
   $('plc-message').textContent = ok ? `${settings.plc.interval}ms 주기 · unsigned 16-bit${Object.keys(data.wordErrors || {}).length ? ' · 추가 주소 수신 오류 (값에 마우스를 올려 확인)' : ''}` : data.message || (data.state === 'connecting' ? 'PLC에서 값을 읽고 있습니다.' : 'PLC 연결 버튼으로 읽기를 시작하세요.');

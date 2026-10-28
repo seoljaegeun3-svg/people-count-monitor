@@ -32,7 +32,7 @@ const plcServer = net.createServer(socket => {
     if (request.length < 20 || request.length < 20 + request.readUInt16LE(16)) return;
     assert.equal(request.length, 34, 'automatic recording must use the existing read-only XGT packet');
     const word = request.subarray(30).toString('ascii');
-    assert(['%MW0', '%MW2', '%MW3'].includes(word));
+    assert(['%MW0', '%MW3'].includes(word));
     assert.deepEqual([...request.subarray(20, 30)], [0x54, 0, 2, 0, 0, 0, 1, 0, 4, 0]);
     const response = Buffer.alloc(34);
     request.copy(response, 0, 0, 20);
@@ -42,7 +42,7 @@ const plcServer = net.createServer(socket => {
     response.writeUInt16LE(2, 22);
     response.writeUInt16LE(1, 28);
     response.writeUInt16LE(2, 30);
-    response.writeUInt16LE(word === '%MW2' ? 0 : word === '%MW3' ? 65535 : plcValue, 32);
+    response.writeUInt16LE(word === '%MW3' ? 65535 : plcValue, 32);
     if (word === '%MW0') plcReads.push({ value: plcValue, at: Date.now() });
     socket.end(response);
   });

@@ -55,7 +55,7 @@ test('LS XGT read: exact %MW0 packet, fragmented response, malformed responses, 
   });
 });
 
-test('monitor reads primary, MW2 and MW3, isolates extra errors and deduplicates addresses', async t => {
+test('monitor reads only primary and MW3, isolates extra errors and deduplicates addresses', async t => {
   let failExtra = false;
   const requests = [];
   const server = net.createServer(socket => {
@@ -75,7 +75,7 @@ test('monitor reads primary, MW2 and MW3, isolates extra errors and deduplicates
       response.writeUInt16LE(failExtra && word === '%MW3' ? 1 : 0, 26);
       response.writeUInt16LE(1, 28);
       response.writeUInt16LE(2, 30);
-      response.writeUInt16LE({ '%MW0': 0, '%MW2': 42, '%MW3': 65535 }[word], 32);
+      response.writeUInt16LE({ '%MW0': 0, '%MW3': 65535 }[word], 32);
       socket.end(response);
     });
   });
@@ -84,17 +84,18 @@ test('monitor reads primary, MW2 and MW3, isolates extra errors and deduplicates
   t.after(() => new Promise(resolve => server.close(resolve)));
   const config = { host: '127.0.0.1', port: server.address().port, word: '%MW0', interval: 500 };
   assert.deepEqual(await readMonitorWords(config), {
-    value: 0, words: { '%MW0': 0, '%MW2': 42, '%MW3': 65535 }, wordErrors: {}
+    value: 0, words: { '%MW0': 0, '%MW3': 65535 }, wordErrors: {}
   });
   failExtra = true;
   const partial = await readMonitorWords(config);
   assert.equal(partial.value, 0);
-  assert.equal(partial.words['%MW2'], 42);
   assert.equal(partial.words['%MW3'], null);
   assert.match(partial.wordErrors['%MW3'], /PLC 오류/);
   requests.length = 0;
-  assert.equal((await readMonitorWords({ ...config, word: '%MW2' })).value, 42);
-  assert.deepEqual(requests.sort(), ['%MW2', '%MW3']);
+  failExtra = false;
+  assert.equal((await readMonitorWords({ ...config, word: '%MW3' })).value, 65535);
+  assert.deepEqual(requests, ['%MW3']);
+  failExtra = true;
   await assert.rejects(readMonitorWords({ ...config, word: '%MW3' }), /PLC 오류/);
 });
 
@@ -121,7 +122,7 @@ test('monitor never overlaps word reads on a PLC that permits one request at a t
         response.writeUInt16LE(busy ? 1 : 0, 26);
         response.writeUInt16LE(1, 28);
         response.writeUInt16LE(2, 30);
-        response.writeUInt16LE({ '%MW0': 41, '%MW2': 0, '%MW3': 65535 }[word], 32);
+        response.writeUInt16LE({ '%MW0': 41, '%MW3': 65535 }[word], 32);
         pending--;
         socket.end(response);
       }, 25);
@@ -132,8 +133,8 @@ test('monitor never overlaps word reads on a PLC that permits one request at a t
   t.after(() => new Promise(resolve => server.close(resolve)));
   const config = { host: '127.0.0.1', port: server.address().port, word: '%MW0', interval: 500 };
   assert.deepEqual(await readMonitorWords(config), {
-    value: 41, words: { '%MW0': 41, '%MW2': 0, '%MW3': 65535 }, wordErrors: {}
+    value: 41, words: { '%MW0': 41, '%MW3': 65535 }, wordErrors: {}
   });
   assert.equal(peak, 1);
-  assert.deepEqual(requests, ['%MW0', '%MW2', '%MW3']);
+  assert.deepEqual(requests, ['%MW0', '%MW3']);
 });
