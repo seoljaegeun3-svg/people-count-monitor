@@ -1,0 +1,28 @@
+name: PLC monitor checks
+
+on:
+  pull_request:
+    paths:
+      - 'plc.js'
+      - 'plc.test.js'
+      - 'main.js'
+      - 'ui/app.js'
+      - 'ui/index.html'
+      - 'ui/style.css'
+      - '.github/workflows/plc-monitor-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --check main.js
+      - run: node --check ui/app.js
+      - run: node --test plc.test.js web-url.test.js

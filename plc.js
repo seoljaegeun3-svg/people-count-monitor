@@ -61,4 +61,21 @@ function readWord(config) {
     });
   });
 }
-module.exports = { validatePLC, readWord, readRequest };
+async function readMonitorWords(config) {
+  const addresses = [...new Set([config.word, '%MW3'])];
+  const results = [];
+  // Read one address at a time: PLC Ethernet modules can limit concurrent clients.
+  for (const word of addresses) {
+    try { results.push({ status: 'fulfilled', value: await readWord({ ...config, word }) }); }
+    catch (reason) { results.push({ status: 'rejected', reason }); }
+  }
+  if (results[0].status === 'rejected') throw results[0].reason;
+  const words = {}, wordErrors = {};
+  results.forEach((result, index) => {
+    const word = addresses[index];
+    words[word] = result.status === 'fulfilled' ? result.value : null;
+    if (result.status === 'rejected') wordErrors[word] = result.reason.message;
+  });
+  return { value: words[config.word], words, wordErrors };
+}
+module.exports = { validatePLC, readWord, readRequest, readMonitorWords };

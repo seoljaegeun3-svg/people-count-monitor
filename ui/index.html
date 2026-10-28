@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'">
-  <title>People Count Monitor</title>
+  <title>People Count Monitor 1.3.5</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
     <div class="brand-icon">◉</div><div><h1>People Count <span>Monitor</span></h1><p>카메라부터 PLC까지, 하나의 화면에서</p></div>
     <div class="header-right">
       <div class="recording-controls"><label class="audio-choice"><input id="record-audio" type="checkbox">PC 소리 포함 <span>(다른 앱 소리도 녹음)</span></label><button id="record-start">● 녹화 시작</button><button id="record-stop" disabled>■ 중지</button><button id="record-convert" title="기존 WebM 녹화 파일을 MP4로 변환">MP4 변환</button><button id="record-file" disabled>저장 폴더</button><span id="record-status" role="status" aria-live="polite">녹화 대기</span></div>
-      <button id="add-browser">＋ 웹 창 추가</button><time id="clock"></time><button id="open-settings">⚙ 설정</button>
+      <button id="add-browser">＋ 웹 창 추가</button><time id="clock"></time><button id="open-settings">⚙ 설정 · v1.3.5</button>
     </div>
   </header>
   <main>
@@ -20,7 +20,7 @@
       <section class="panel camera-panel" aria-label="카메라">
         <div class="panel-title"><div><span class="eyebrow">01 / CAMERA</span><h2>카메라 모니터링</h2></div><span class="status" id="camera-status">연결 대기</span></div>
         <form id="camera-form" class="address-bar"><label class="sr-only" for="camera-url">카메라 주소</label><input id="camera-url" type="url" required><button>열기 ↗</button></form>
-        <div class="browser-tools"><div><button data-panel="camera" data-action="home">로그인 / 홈</button><button data-panel="camera" data-action="people-counting">피플카운팅</button></div><div><button data-panel="camera" data-action="back" aria-label="카메라 뒤로">←</button><button data-panel="camera" data-action="reload" aria-label="카메라 새로고침">↻</button><button data-panel="camera" data-action="zoom-out" aria-label="카메라 축소">−</button><button data-panel="camera" data-action="zoom-in" aria-label="카메라 확대">＋</button></div></div>
+        <div class="browser-tools"><div><button data-panel="camera" data-action="home">TD2000 홈 / 로그인</button></div><div><button data-panel="camera" data-action="back" aria-label="카메라 뒤로">←</button><button data-panel="camera" data-action="reload" aria-label="카메라 새로고침">↻</button><button data-panel="camera" data-action="zoom-out" aria-label="카메라 축소">−</button><button data-panel="camera" data-action="zoom-in" aria-label="카메라 확대">＋</button></div></div>
         <div class="browser-space" id="camera-space"><div><span class="empty-icon">◎</span><h3>카메라 화면</h3><p>카메라와 같은 네트워크에서 연결하세요.<br>로그인은 이 영역에 표시되는 카메라 페이지에서 합니다.</p></div></div>
       </section>
       <div class="divider" role="separator" aria-label="카메라 화면 비율" aria-orientation="vertical" tabindex="0"></div>
@@ -35,7 +35,10 @@
     <div class="row-divider" role="separator" aria-label="위아래 화면 비율" aria-orientation="horizontal" tabindex="0"></div>
     <section class="plc-panel" aria-label="PLC 실시간 값">
       <div class="plc-heading"><span class="eyebrow">03 / LIVE PLC</span><h2>피플카운팅 값</h2><span id="plc-endpoint">LS XGT · 192.168.1.2:2004</span></div>
-      <div class="reading"><span class="word" id="plc-word">%MW0</span><strong id="plc-value">—</strong><span class="unit">WORD 값</span></div>
+      <div class="plc-readings">
+        <div class="reading"><span class="word" id="plc-word">%MW0</span><strong id="plc-value">—</strong><span class="unit">WORD 값</span></div>
+        <div class="reading extra-reading work-area-reading"><strong id="plc-value-mw3" role="status" aria-live="polite">작업영역 상태 확인 불가</strong></div>
+      </div>
       <div class="plc-detail"><span id="plc-status" class="status">연결 대기</span><p id="plc-message">설정을 확인한 후 연결하세요.</p><small id="plc-updated">수신 기록 없음</small></div>
       <button class="primary" id="plc-connect">PLC 연결</button>
     </section>

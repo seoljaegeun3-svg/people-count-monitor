@@ -31,7 +31,9 @@ const plcServer = net.createServer(socket => {
     request = Buffer.concat([request, chunk]);
     if (request.length < 20 || request.length < 20 + request.readUInt16LE(16)) return;
     assert.equal(request.length, 34, 'automatic recording must use the existing read-only XGT packet');
-    assert.deepEqual([...request.subarray(20)], [0x54, 0, 2, 0, 0, 0, 1, 0, 4, 0, 37, 77, 87, 48]);
+    const word = request.subarray(30).toString('ascii');
+    assert(['%MW0', '%MW3'].includes(word));
+    assert.deepEqual([...request.subarray(20, 30)], [0x54, 0, 2, 0, 0, 0, 1, 0, 4, 0]);
     const response = Buffer.alloc(34);
     request.copy(response, 0, 0, 20);
     response[13] = 0x11;
@@ -40,8 +42,8 @@ const plcServer = net.createServer(socket => {
     response.writeUInt16LE(2, 22);
     response.writeUInt16LE(1, 28);
     response.writeUInt16LE(2, 30);
-    response.writeUInt16LE(plcValue, 32);
-    plcReads.push({ value: plcValue, at: Date.now() });
+    response.writeUInt16LE(word === '%MW3' ? 65535 : plcValue, 32);
+    if (word === '%MW0') plcReads.push({ value: plcValue, at: Date.now() });
     socket.end(response);
   });
 });
@@ -138,10 +140,9 @@ const timeout = setTimeout(() => { console.error('Camera and browser smoke test 
 
   await ui("document.querySelector('[data-action=home]').click()");
   await until(() => camera.getURL() === `${origin}/`, 'camera home');
-  await ui("document.querySelector('[data-action=people-counting]').click()");
-  await until(() => camera.getURL().endsWith('#/statistics/setup/PEOPLE_COUNTING'), 'people-counting shortcut');
+  assert.equal(await ui("document.querySelector('[data-action=people-counting]') === null"), true, 'obsolete WiseAI shortcut is absent');
   assert(!fs.readFileSync(path.join(profile, 'settings.json'), 'utf8').includes(password));
-  console.log('PASS: home/counting shortcuts, camera password absent from settings');
+  console.log('PASS: TD2000 home shortcut, no obsolete vendor page, camera password absent from settings');
 
   const browser = win.contentView.children[1].webContents;
   const navigateWeb = input => ui(`document.getElementById('youtube-url').value = ${JSON.stringify(input)}; document.getElementById('youtube-form').requestSubmit(); true;`);
